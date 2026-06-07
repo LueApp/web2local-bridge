@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>web2local — extend your website with local machine power</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #c9d1d9;
+      --muted:    #8b949e;
+      --accent:   #58a6ff;
+      --green:    #3fb950;
+      --yellow:   #d29922;
+      --red:      #f85149;
+      --mono:     'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(13,17,23,.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; height: 56px;
+    }
+    .nav-brand { font-weight: 700; font-size: 1.05rem; letter-spacing: -.3px; color: #fff; }
+    .nav-brand span { color: var(--accent); }
+    .nav-links { display: flex; gap: 28px; }
+    .nav-links a { color: var(--muted); font-size: .9rem; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    #daemon-pill {
+      display: flex; align-items: center; gap: 7px;
+      font-size: .8rem; color: var(--muted);
+    }
+    #daemon-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); transition: background .3s;
+    }
+    #daemon-dot.up   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #daemon-dot.down { background: var(--red); }
+
+    /* ── Layout ── */
+    main { max-width: 860px; margin: 0 auto; padding: 0 24px 80px; }
+
+    section { padding: 64px 0 0; }
+
+    h1 { font-size: 2.6rem; font-weight: 800; line-height: 1.2; color: #fff; letter-spacing: -.5px; }
+    h2 { font-size: 1.4rem; font-weight: 700; color: #fff; margin-bottom: 20px; padding-bottom: 8px;
+         border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 8px; }
+    p  { color: var(--text); margin-bottom: 16px; }
+
+    .subtitle {
+      font-size: 1.15rem; color: var(--muted); margin: 16px 0 32px;
+      max-width: 600px; line-height: 1.6;
+    }
+
+    /* ── Hero ── */
+    #hero { padding-top: 80px; }
+    .hero-badges { display: flex; gap: 10px; margin-bottom: 28px; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 12px; font-size: .8rem; color: var(--muted);
+    }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+    /* ── Code blocks ── */
+    pre, code { font-family: var(--mono); }
+    code { background: #1f2937; border-radius: 4px; padding: 1px 5px;
+           font-size: .85em; color: #a5d6ff; }
+    pre {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 18px 20px; overflow-x: auto; margin-bottom: 20px;
+      font-size: .85rem; line-height: 1.6;
+    }
+    pre code { background: none; padding: 0; color: var(--text); font-size: inherit; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 22px 24px; margin-bottom: 16px;
+    }
+
+    /* ── Security model diagram ── */
+    .security-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+      margin: 24px 0;
+    }
+    .sec-card {
+      border-radius: 10px; padding: 20px;
+      border: 1px solid var(--border); text-align: center;
+    }
+    .sec-card.white { border-color: #388bfd44; background: #388bfd0d; }
+    .sec-card.gray  { border-color: #d2992244; background: #d299220d; }
+    .sec-card.block { border-color: #f8514944; background: #f851490d; }
+    .sec-icon { font-size: 1.8rem; margin-bottom: 10px; }
+    .sec-title { font-weight: 700; font-size: .95rem; margin-bottom: 6px; }
+    .sec-card.white .sec-title { color: #58a6ff; }
+    .sec-card.gray  .sec-title { color: #d29922; }
+    .sec-card.block .sec-title { color: #f85149; }
+    .sec-desc { font-size: .82rem; color: var(--muted); line-height: 1.5; }
+
+    .flow-row {
+      display: flex; align-items: center; gap: 0; margin: 28px 0;
+      font-size: .82rem;
+    }
+    .flow-box {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 14px; text-align: center; color: var(--muted);
+    }
+    .flow-box strong { display: block; color: var(--text); font-size: .9rem; margin-bottom: 2px; }
+    .flow-arrow { padding: 0 10px; color: var(--muted); font-size: 1.1rem; }
+
+    /* ── Steps ── */
+    .steps { counter-reset: step; }
+    .step { display: flex; gap: 18px; margin-bottom: 28px; }
+    .step-num {
+      counter-increment: step;
+      flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%;
+      background: var(--accent); color: #000; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .85rem; margin-top: 2px;
+    }
+    .step-num::before { content: counter(step); }
+    .step-body { flex: 1; }
+
+    /* ── Endpoint table ── */
+    .endpoints { border-collapse: collapse; width: 100%; margin-bottom: 20px; font-size: .85rem; }
+    .endpoints th, .endpoints td {
+      text-align: left; padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .endpoints th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; }
+    .endpoints td:first-child { font-family: var(--mono); color: #79c0ff; white-space: nowrap; }
+    .endpoints tr:last-child td { border-bottom: none; }
+
+    /* ── Demo section ── */
+    #demo-status {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px 20px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--surface);
+      margin-bottom: 24px; font-size: .9rem;
+    }
+    #demo-status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+    }
+    #demo-status-dot.up   { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    #demo-status-dot.down { background: var(--red); }
+
+    .input-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    .input-row input {
+      flex: 1; min-width: 160px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); font-family: var(--mono); font-size: .88rem;
+      padding: 9px 12px; outline: none;
+    }
+    .input-row input:focus { border-color: var(--accent); }
+    .btn {
+      padding: 9px 20px; border-radius: 6px; border: none; cursor: pointer;
+      font-size: .88rem; font-weight: 600; transition: opacity .15s;
+    }
+    .btn:hover { opacity: .85; }
+    .btn-primary  { background: var(--accent); color: #000; }
+    .btn-danger   { background: var(--red);    color: #fff; }
+    .btn-ghost {
+      background: transparent; border: 1px solid var(--border); color: var(--text);
+    }
+
+    #demo-output {
+      background: #010409; border: 1px solid var(--border); border-radius: 8px;
+      padding: 16px; min-height: 80px; font-family: var(--mono); font-size: .83rem;
+      color: var(--text); white-space: pre-wrap; overflow-x: auto;
+    }
+    .out-ok  { color: var(--green); }
+    .out-err { color: var(--red); }
+    .out-dim { color: var(--muted); }
+
+    /* ── Config manager ── */
+    .list-section { margin-bottom: 24px; }
+    .list-title {
+      font-size: .8rem; text-transform: uppercase; letter-spacing: .5px;
+      color: var(--muted); margin-bottom: 10px; font-weight: 600;
+    }
+    #whitelist-items, #graylist-items { min-height: 36px; }
+    .origin-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 10px 4px 14px;
+      font-family: var(--mono); font-size: .8rem; margin: 3px;
+    }
+    .chip-remove {
+      background: none; border: none; cursor: pointer; color: var(--muted);
+      font-size: .9rem; padding: 0; line-height: 1;
+    }
+    .chip-remove:hover { color: var(--red); }
+    .empty-list { color: var(--muted); font-size: .85rem; font-style: italic; }
+
+    /* ── Warning box ── */
+    .warning {
+      background: #d2992210; border: 1px solid #d2992250;
+      border-radius: 8px; padding: 14px 18px; margin: 16px 0;
+      font-size: .88rem; color: #d29922;
+    }
+    .warning strong { display: block; margin-bottom: 4px; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border); margin-top: 80px;
+      padding: 28px 0; text-align: center; color: var(--muted); font-size: .82rem;
+    }
+
+    @media (max-width: 600px) {
+      h1 { font-size: 1.8rem; }
+      .security-grid { grid-template-columns: 1fr; }
+      nav { padding: 0 16px; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-brand">web<span>2</span>local</div>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#security">Security</a>
+    <a href="#quickstart">Quick start</a>
+    <a href="#api">API</a>
+    <a href="#demo">Demo</a>
+  </div>
+  <div id="daemon-pill">
+    <div id="daemon-dot"></div>
+    <span id="daemon-label">checking…</span>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ── Hero ──────────────────────────────────────────────────────────────── -->
+  <section id="hero">
+    <div class="hero-badges">
+      <span class="badge"><span class="badge-dot"></span>No cloud. Runs locally.</span>
+      <span class="badge">Python · stdlib only</span>
+      <span class="badge">Whitelist &amp; graylist security</span>
+    </div>
+    <h1>Give your website<br>local machine power.</h1>
+    <p class="subtitle">
+      web2local is a tiny daemon that bridges websites to your local environment —
+      safely. Your site can run commands, read files, and talk to hardware that
+      a browser alone can never reach.
+    </p>
+  </section>
+
+  <!-- ── How it works ──────────────────────────────────────────────────────── -->
+  <section id="how">
+    <h2>How it works</h2>
+    <p>
+      Browsers are sandboxed on purpose — a web page cannot touch your filesystem,
+      run a process, or connect to a serial port without explicit permission. But
+      some tools genuinely need local power: build scripts, hardware dashboards,
+      developer utilities, media processors.
+    </p>
+    <p>
+      web2local runs a small HTTP server bound to <code>127.0.0.1</code> only
+      (never reachable from the internet). Your website calls it with
+      <code>fetch()</code>. The daemon checks who is asking, then acts accordingly.
+    </p>
+
+    <div class="flow-row">
+      <div class="flow-box"><strong>Your website</strong>mysite.com</div>
+      <div class="flow-arrow">──→</div>
+      <div class="flow-box"><strong>web2local daemon</strong>127.0.0.1:7878</div>
+      <div class="flow-arrow">──→</div>
+      <div class="flow-box"><strong>Local machine</strong>shell · files · hardware</div>
+    </div>
+
+    <p>
+      The daemon answers only to requests whose <code>Host</code> header is
+      <code>127.0.0.1</code> or <code>localhost</code>. This one check kills the
+      most dangerous class of localhost attacks — <strong>DNS rebinding</strong> —
+      where a malicious site manipulates DNS to make the browser treat
+      <code>evil.com</code> as a local address.
+    </p>
+
+    <div class="warning">
+      <strong>Why Host header, not just CORS?</strong>
+      CORS controls which pages can <em>read</em> the response; the Host header
+      check prevents the request from being <em>accepted at all</em> if it arrived
+      via a DNS-rebound domain. They defend against different attacks.
+    </div>
+  </section>
+
+  <!-- ── Security model ────────────────────────────────────────────────────── -->
+  <section id="security">
+    <h2>Security model</h2>
+    <p>
+      Every request carries an <code>Origin</code> header — the site that made it.
+      The daemon classifies that origin into one of three tiers:
+    </p>
+
+    <div class="security-grid">
+      <div class="sec-card white">
+        <div class="sec-icon">✅</div>
+        <div class="sec-title">Whitelist</div>
+        <div class="sec-desc">
+          Origins you fully trust. Commands execute immediately with no prompt.
+          Use for your own sites.
+        </div>
+      </div>
+      <div class="sec-card gray">
+        <div class="sec-icon">⚠️</div>
+        <div class="sec-title">Graylist</div>
+        <div class="sec-desc">
+          Origins you want to evaluate. A native dialog shows the exact command.
+          You read it, then allow or deny. Auto-denies after 120 s.
+        </div>
+      </div>
+      <div class="sec-card block">
+        <div class="sec-icon">🚫</div>
+        <div class="sec-title">Blocked</div>
+        <div class="sec-desc">
+          Any origin not on either list. Returns HTTP 403 immediately.
+          No command is shown or executed.
+        </div>
+      </div>
+    </div>
+
+    <h3>What the graylist dialog shows you</h3>
+    <p>
+      When a graylist site sends a command, a window appears with:
+    </p>
+    <ul style="margin: 0 0 16px 22px; color: var(--muted);">
+      <li>The exact requesting origin (the website's URL)</li>
+      <li>The full command in a scrollable monospace box — no truncation</li>
+      <li>A countdown timer (auto-deny at zero)</li>
+      <li>Two buttons: <strong style="color:var(--red)">Deny</strong> and <strong style="color:var(--green)">Allow Execution</strong></li>
+    </ul>
+    <p>
+      The command is displayed as an argument list — no shell expansion happens.
+      What you see is exactly what will run. Scroll right if it is long;
+      the dialog will not dismiss until you click a button.
+    </p>
+
+    <h3>What it does not protect against</h3>
+    <div class="card">
+      <p style="margin-bottom:10px">The graylist is only as good as your reading. Keep these risks in mind:</p>
+      <ul style="margin: 0 0 0 20px; color: var(--muted);">
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">Rubber-stamping</strong> — users who click Allow without reading are the weakest link.</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">State accumulation</strong> — a site approved for 10 harmless commands may use their combined effect maliciously.</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">Non-browser callers</strong> — <code>Origin</code> is only enforced by browsers. A script using <code>curl</code> can forge it. The daemon should only be used from browser-based websites.</li>
+        <li><strong style="color:var(--text)">Broad whitelist scope</strong> — whitelisting <code>https://example.com</code> trusts every page on that domain.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── Quick start ────────────────────────────────────────────────────────── -->
+  <section id="quickstart">
+    <h2>Quick start</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h3>Run the daemon</h3>
+          <pre><code>python3 daemon.py</code></pre>
+          <p>
+            The daemon binds to <code>127.0.0.1:7878</code> and stays running
+            in your terminal. On the first launch it creates a config file at
+            <code>~/.config/web2local/config.json</code>.
+          </p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h3>Add your site to a list</h3>
+          <p>
+            You can do this from the <a href="#demo">demo below</a>, from the
+            config file directly, or via the API:
+          </p>
+          <pre><code># Whitelist (trust fully)
+curl -s -X POST http://127.0.0.1:7878/config/whitelist \
+  -H 'Content-Type: application/json' \
+  -d '{"origin":"https://mysite.com"}'
+
+# Graylist (ask before each command)
+curl -s -X POST http://127.0.0.1:7878/config/graylist \
+  -H 'Content-Type: application/json' \
+  -d '{"origin":"https://other-site.com"}'</code></pre>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h3>Include the client library</h3>
+          <pre><code>&lt;script src="client.js"&gt;&lt;/script&gt;</code></pre>
+          <p>Copy <code>client.js</code> from this repo into your project.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num"></div>
+        <div class="step-body">
+          <h3>Call the API from your page</h3>
+          <pre><code>const w2l = new Web2Local();   // default port 7878
+
+if (await w2l.isRunning()) {
+  const r = await w2l.run("ls", ["-la", "/tmp"]);
+  console.log(r.stdout);
+  console.log("exit:", r.exit_code);
+} else {
+  console.warn("web2local daemon not running");
+}</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── API reference ─────────────────────────────────────────────────────── -->
+  <section id="api">
+    <h2>API reference</h2>
+    <p>All endpoints are on <code>http://127.0.0.1:7878</code>.</p>
+
+    <table class="endpoints">
+      <thead>
+        <tr><th>Method &amp; Path</th><th>Auth</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>GET /status</td>
+          <td>any origin</td>
+          <td>Returns <code>{"status":"running","version":"1.0.0"}</code>. Use this to detect the daemon.</td>
+        </tr>
+        <tr>
+          <td>POST /run</td>
+          <td>whitelist / graylist</td>
+          <td>Execute a command. Body: <code>{"command":"ls","args":["-la"]}</code>.
+              Returns <code>{"stdout":"…","stderr":"…","exit_code":0}</code>.</td>
+        </tr>
+        <tr>
+          <td>GET /config</td>
+          <td>any (local only)</td>
+          <td>Return current whitelist and graylist.</td>
+        </tr>
+        <tr>
+          <td>POST /config/whitelist</td>
+          <td>any (local only)</td>
+          <td>Add origin to whitelist. Body: <code>{"origin":"https://…"}</code>.</td>
+        </tr>
+        <tr>
+          <td>POST /config/graylist</td>
+          <td>any (local only)</td>
+          <td>Add origin to graylist.</td>
+        </tr>
+        <tr>
+          <td>POST /config/remove</td>
+          <td>any (local only)</td>
+          <td>Remove origin from all lists.</td>
+        </tr>
+        <tr>
+          <td>POST /config/reload</td>
+          <td>any (local only)</td>
+          <td>Reload config from disk without restarting.</td>
+        </tr>
+        <tr>
+          <td>GET /log</td>
+          <td>any (local only)</td>
+          <td>Return last 200 audit log lines.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Error responses</h3>
+    <pre><code>403  {"error": "origin not in whitelist or graylist"}
+403  {"error": "command denied by user"}
+403  {"error": "host must be 127.0.0.1 or localhost"}
+400  {"error": "command must be a non-empty string"}
+408  {"error": "command timed out (30 s limit)"}</code></pre>
+
+    <h3>Command rules</h3>
+    <ul style="margin: 0 0 16px 22px; color: var(--muted);">
+      <li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
+      <li><code>args</code> is a flat list of strings — each element is one argument.</li>
+      <li>Commands time out after 30 seconds.</li>
+      <li>The process inherits the daemon's environment and working directory.</li>
+    </ul>
+  </section>
+
+  <!-- ── Live demo ─────────────────────────────────────────────────────────── -->
+  <section id="demo">
+    <h2>Live demo</h2>
+    <p>This page connects to your local daemon in real time.</p>
+
+    <div id="demo-status">
+      <div id="demo-status-dot"></div>
+      <span id="demo-status-text">Checking for daemon at 127.0.0.1:7878…</span>
+    </div>
+
+    <!-- Run a command -->
+    <div class="card">
+      <h3 style="margin-bottom:14px">Run a command</h3>
+      <div class="input-row">
+        <input id="cmd-input"  type="text" placeholder="command (e.g. ls)"  value="ls" />
+        <input id="args-input" type="text" placeholder='args space-separated (e.g. -la /tmp)' value="-la /tmp" />
+        <button class="btn btn-primary" onclick="runCmd()">Run</button>
+      </div>
+      <div id="demo-output" class="out-dim">Output will appear here.</div>
+    </div>
+
+    <!-- Config manager -->
+    <div class="card" style="margin-top:24px">
+      <h3 style="margin-bottom:16px">Manage lists</h3>
+
+      <div class="list-section">
+        <div class="list-title">✅ Whitelist</div>
+        <div id="whitelist-items"><span class="empty-list">Loading…</span></div>
+      </div>
+      <div class="list-section">
+        <div class="list-title">⚠️ Graylist</div>
+        <div id="graylist-items"><span class="empty-list">Loading…</span></div>
+      </div>
+
+      <div class="input-row" style="margin-top:16px">
+        <input id="add-origin" type="text" placeholder="https://mysite.com" style="flex:2" />
+        <button class="btn btn-primary" onclick="addToList('whitelist')">+ Whitelist</button>
+        <button class="btn btn-ghost"   onclick="addToList('graylist')">+ Graylist</button>
+      </div>
+    </div>
+
+    <!-- Audit log -->
+    <div class="card" style="margin-top:24px">
+      <h3 style="margin-bottom:14px">Audit log <span style="color:var(--muted);font-weight:400;font-size:.85rem">(last 20 entries)</span></h3>
+      <div id="log-output" style="font-family:var(--mono);font-size:.78rem;color:var(--muted);
+           white-space:pre-wrap;max-height:200px;overflow-y:auto;">Loading…</div>
+      <button class="btn btn-ghost" style="margin-top:12px;font-size:.8rem" onclick="refreshLog()">Refresh</button>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  web2local — runs on your machine, serves your websites.
+</footer>
+
+<script src="client.js"></script>
+<script>
+  const w2l = new Web2Local();
+
+  // ── Daemon status indicator ───────────────────────────────────────────────
+  async function checkDaemon() {
+    const running = await w2l.isRunning();
+
+    // Nav pill
+    const dot   = document.getElementById("daemon-dot");
+    const label = document.getElementById("daemon-label");
+    dot.className   = running ? "up" : "down";
+    label.textContent = running ? "daemon running" : "daemon offline";
+
+    // Demo status bar
+    const sdot  = document.getElementById("demo-status-dot");
+    const stext = document.getElementById("demo-status-text");
+    if (running) {
+      sdot.className    = "up";
+      stext.textContent = "Daemon connected at http://127.0.0.1:7878";
+    } else {
+      sdot.className    = "down";
+      stext.textContent =
+        "Daemon not detected. Run: python3 daemon.py — then reload this page.";
+    }
+
+    if (running) {
+      refreshConfig();
+      refreshLog();
+    }
+  }
+
+  // ── Run a command ─────────────────────────────────────────────────────────
+  async function runCmd() {
+    const cmd  = document.getElementById("cmd-input").value.trim();
+    const args = document.getElementById("args-input").value.trim()
+                   .split(/\s+/).filter(Boolean);
+    const out  = document.getElementById("demo-output");
+
+    if (!cmd) { out.textContent = "Enter a command first."; return; }
+    out.className   = "out-dim";
+    out.textContent = "Running…";
+
+    try {
+      const r = await w2l.run(cmd, args);
+      const parts = [];
+      if (r.stdout) parts.push(r.stdout);
+      if (r.stderr) parts.push("stderr:\n" + r.stderr);
+      parts.push(`\nexit code: ${r.exit_code}`);
+
+      out.textContent = parts.join("\n");
+      out.className   = r.exit_code === 0 ? "out-ok" : "out-err";
+    } catch (e) {
+      out.textContent = "Error: " + e.message;
+      out.className   = "out-err";
+    }
+    refreshLog();
+  }
+
+  // ── Config management ─────────────────────────────────────────────────────
+  async function refreshConfig() {
+    let cfg;
+    try { cfg = await w2l.getConfig(); } catch { return; }
+    renderList("whitelist-items", cfg.whitelist, "whitelist");
+    renderList("graylist-items",  cfg.graylist,  "graylist");
+  }
+
+  function renderList(elementId, items, listType) {
+    const el = document.getElementById(elementId);
+    if (!items || items.length === 0) {
+      el.innerHTML = '<span class="empty-list">None</span>';
+      return;
+    }
+    el.innerHTML = items.map(o => `
+      <span class="origin-chip">
+        ${escapeHtml(o)}
+        <button class="chip-remove" title="Remove"
+          onclick="removeOrigin('${escapeHtml(o)}')">✕</button>
+      </span>`).join("");
+  }
+
+  async function addToList(list) {
+    const input  = document.getElementById("add-origin");
+    const origin = input.value.trim().replace(/\/$/, "");
+    if (!origin) return;
+    try {
+      if (list === "whitelist") await w2l.addToWhitelist(origin);
+      else                       await w2l.addToGraylist(origin);
+      input.value = "";
+      refreshConfig();
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  }
+
+  async function removeOrigin(origin) {
+    try { await w2l.removeOrigin(origin); refreshConfig(); }
+    catch (e) { alert("Error: " + e.message); }
+  }
+
+  // ── Audit log ─────────────────────────────────────────────────────────────
+  async function refreshLog() {
+    const el = document.getElementById("log-output");
+    try {
+      const { entries } = await w2l.getLog();
+      el.textContent = entries.slice(-20).join("\n") || "(empty)";
+      el.scrollTop   = el.scrollHeight;
+    } catch {
+      el.textContent = "Could not load log.";
+    }
+  }
+
+  // ── Utilities ─────────────────────────────────────────────────────────────
+  function escapeHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+            .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  // Run command on Enter in args input
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("args-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") runCmd();
+    });
+    document.getElementById("cmd-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") runCmd();
+    });
+    checkDaemon();
+    setInterval(checkDaemon, 10000);  // re-check every 10 s
+  });
+</script>
+</body>
+</html>
