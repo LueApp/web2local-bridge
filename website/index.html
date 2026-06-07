@@ -207,6 +207,31 @@
       background: transparent; border: 1px solid var(--border); color: var(--text);
     }
 
+    /* Download card */
+    .download-card {
+      background: linear-gradient(135deg, #1e3a5f 0%, #161b22 100%);
+      border: 1px solid var(--accent);
+      border-radius: 10px; padding: 22px 24px; margin-bottom: 14px;
+    }
+    .download-row {
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      margin-top: 14px;
+    }
+    .btn-download {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent); color: #000; font-weight: 600;
+      padding: 10px 18px; border-radius: 6px; text-decoration: none;
+      font-size: .9rem; transition: opacity .15s;
+    }
+    .btn-download:hover { opacity: .85; text-decoration: none; }
+    .btn-source {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--text); border: 1px solid var(--border);
+      padding: 10px 18px; border-radius: 6px; text-decoration: none;
+      font-size: .9rem; background: var(--surface);
+    }
+    .btn-source:hover { border-color: var(--accent); text-decoration: none; }
+
     #demo-output {
       background: #010409; border: 1px solid var(--border); border-radius: 8px;
       padding: 16px; min-height: 80px; font-family: var(--mono); font-size: .83rem;
@@ -402,6 +427,32 @@
   <!-- ── Quick start ────────────────────────────────────────────────────────── -->
   <section id="quickstart">
     <h2 data-i18n="qsTitle">Quick start</h2>
+
+    <div class="download-card">
+      <h3 style="color:#fff;margin-bottom:6px" data-i18n="dlTitle">Get the daemon</h3>
+      <p style="color:var(--muted);margin-bottom:0" data-i18n-html="dlBody">
+        A single Python file, no dependencies beyond the standard library.
+        Requires Python 3.7+.
+      </p>
+      <div class="download-row">
+        <a class="btn-download"
+           href="https://raw.githubusercontent.com/LueApp/web2local-bridge/main/daemon.py"
+           download="daemon.py">
+          ↓ <span data-i18n="dlDownloadBtn">Download daemon.py</span>
+        </a>
+        <a class="btn-source"
+           href="https://github.com/LueApp/web2local-bridge"
+           target="_blank" rel="noopener">
+          <span data-i18n="dlViewSource">View source on GitHub</span> ↗
+        </a>
+        <a class="btn-source"
+           href="https://raw.githubusercontent.com/LueApp/web2local-bridge/main/website/client.js"
+           download="client.js">
+          ↓ <span data-i18n="dlClientBtn">client.js</span>
+        </a>
+      </div>
+    </div>
+
     <div class="steps">
       <div class="step">
         <div class="step-num"></div>
@@ -647,6 +698,11 @@ if (await w2l.isRunning()) {
         <li><strong style="color:var(--text)">Broad whitelist scope</strong> — whitelisting <code>https://example.com</code> trusts every page on that domain.</li>`,
 
       qsTitle: "Quick start",
+      dlTitle: "Get the daemon",
+      dlBody: "A single Python file, no dependencies beyond the standard library. Requires Python 3.7+.",
+      dlDownloadBtn: "Download daemon.py",
+      dlViewSource: "View source on GitHub",
+      dlClientBtn: "client.js",
       qs1Title: "Run the daemon",
       qs1Body: "The daemon binds to <code>127.0.0.1:7878</code> and stays running in your terminal. On the first launch it creates a config file at <code>~/.config/web2local/config.json</code>.",
       qs2Title: "Add your site to a list",
@@ -694,6 +750,7 @@ if (await w2l.isRunning()) {
       demoRefreshBtn: "Refresh",
       demoLoading: "Loading…",
       demoListEmpty: "None",
+      demoListUnavailable: "Daemon offline — start it to view lists.",
       demoLogEmpty: "(empty)",
       demoLogError: "Could not load log.",
       demoRunning: "Running…",
@@ -747,6 +804,11 @@ if (await w2l.isRunning()) {
         <li><strong style="color:var(--text)">白名单范围过宽</strong>——把 <code>https://example.com</code> 加入白名单意味着该域下所有页面都被信任。</li>`,
 
       qsTitle: "快速上手",
+      dlTitle: "下载服务程序",
+      dlBody: "单个 Python 文件，仅依赖标准库。需要 Python 3.7+。",
+      dlDownloadBtn: "下载 daemon.py",
+      dlViewSource: "在 GitHub 查看源码",
+      dlClientBtn: "client.js",
       qs1Title: "启动服务",
       qs1Body: "服务绑定到 <code>127.0.0.1:7878</code>，运行后在终端中常驻。首次启动时会自动创建配置文件 <code>~/.config/web2local/config.json</code>。",
       qs2Title: "把你的网站加入名单",
@@ -794,6 +856,7 @@ if (await w2l.isRunning()) {
       demoRefreshBtn: "刷新",
       demoLoading: "加载中…",
       demoListEmpty: "无",
+      demoListUnavailable: "服务未启动——请先运行服务。",
       demoLogEmpty: "（空）",
       demoLogError: "无法加载日志。",
       demoRunning: "执行中…",
@@ -830,8 +893,6 @@ if (await w2l.isRunning()) {
 
     // Re-render dynamic content that depends on language
     checkDaemon();
-    refreshConfig();
-    refreshLog();
   }
 
   // ── Daemon status indicator ───────────────────────────────────────────────
@@ -854,6 +915,9 @@ if (await w2l.isRunning()) {
       sdot.className    = "down";
       stext.textContent = t("demoNotDetected");
     }
+    // Always refresh lists and log so they reflect current daemon reachability.
+    refreshConfig();
+    refreshLog();
   }
 
   // ── Run a command ─────────────────────────────────────────────────────────
@@ -886,7 +950,15 @@ if (await w2l.isRunning()) {
   // ── Config management ─────────────────────────────────────────────────────
   async function refreshConfig() {
     let cfg;
-    try { cfg = await w2l.getConfig(); } catch { return; }
+    try {
+      cfg = await w2l.getConfig();
+    } catch {
+      // Daemon unreachable — show that explicitly instead of leaving "Loading…"
+      const msg = `<span class="empty-list">${t("demoListUnavailable")}</span>`;
+      document.getElementById("whitelist-items").innerHTML = msg;
+      document.getElementById("graylist-items").innerHTML  = msg;
+      return;
+    }
     renderList("whitelist-items", cfg.whitelist);
     renderList("graylist-items",  cfg.graylist);
   }
@@ -909,6 +981,7 @@ if (await w2l.isRunning()) {
     const input  = document.getElementById("add-origin");
     const origin = input.value.trim().replace(/\/$/, "");
     if (!origin) return;
+    if (!(await w2l.isRunning())) { alert(t("demoNotDetected")); return; }
     try {
       if (list === "whitelist") await w2l.addToWhitelist(origin);
       else                       await w2l.addToGraylist(origin);
@@ -932,7 +1005,7 @@ if (await w2l.isRunning()) {
       el.textContent = entries.slice(-20).join("\n") || t("demoLogEmpty");
       el.scrollTop   = el.scrollHeight;
     } catch {
-      el.textContent = t("demoLogError");
+      el.textContent = t("demoListUnavailable");
     }
   }
 
