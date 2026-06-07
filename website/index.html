@@ -207,6 +207,35 @@
       background: transparent; border: 1px solid var(--border); color: var(--text);
     }
 
+    /* Process table */
+    .proc-table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: 10px; }
+    .proc-table th, .proc-table td {
+      padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .proc-table th { color: var(--muted); font-size: .72rem; text-transform: uppercase; font-weight: 600; }
+    .proc-table td.mono { font-family: var(--mono); }
+    .proc-table td.pid { color: #79c0ff; }
+    .proc-table tr:last-child td { border-bottom: none; }
+    .btn-mini {
+      padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer;
+      font-size: .75rem; font-weight: 600; margin-right: 4px;
+    }
+    .btn-mini.stop { background: var(--red);    color: #fff; }
+    .btn-mini.logs { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+    .btn-mini.logs:hover { border-color: var(--accent); }
+
+    #proc-log-viewer {
+      background: #010409; border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px; font-family: var(--mono); font-size: .78rem; color: var(--text);
+      white-space: pre-wrap; max-height: 240px; overflow-y: auto; margin-top: 12px;
+      display: none;
+    }
+    #proc-log-viewer.visible { display: block; }
+    .proc-log-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 6px; font-size: .8rem; color: var(--muted);
+    }
+
     /* Download card */
     .download-card {
       background: linear-gradient(135deg, #1e3a5f 0%, #161b22 100%);
@@ -294,6 +323,7 @@
     <a href="#quickstart" data-i18n="navQuickstart">Quick start</a>
     <a href="#api"        data-i18n="navApi">API</a>
     <a href="#demo"       data-i18n="navDemo">Demo</a>
+    <a href="#processes"  data-i18n="navProcesses">Processes</a>
   </div>
   <div class="nav-right">
     <div class="lang-toggle">
@@ -565,6 +595,26 @@ if (await w2l.isRunning()) {
           <td data-i18n="apiAuthLocal">any (local only)</td>
           <td data-i18n="apiDesc8">Return last 200 audit log lines.</td>
         </tr>
+        <tr>
+          <td>POST /spawn</td>
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDesc9">Start a long-running process. Returns immediately with <code>{"pid":…, "started_at":"…", "log_path":"…"}</code>. Output is captured to the log file.</td>
+        </tr>
+        <tr>
+          <td>POST /stop</td>
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDesc10">Stop a spawned process by PID. Body: <code>{"pid":1234}</code>. Sends SIGTERM, then SIGKILL after 3 s.</td>
+        </tr>
+        <tr>
+          <td>GET /ps</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc11">List spawned processes still alive (verified via /proc start-time, so PID reuse won't fool it).</td>
+        </tr>
+        <tr>
+          <td>GET /logs?pid=N</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc12">Return the last 200 lines of a spawned process's captured output.</td>
+        </tr>
       </tbody>
     </table>
 
@@ -639,6 +689,52 @@ if (await w2l.isRunning()) {
     </div>
   </section>
 
+  <!-- ── Process manager ────────────────────────────────────────────────────── -->
+  <section id="processes">
+    <h2 data-i18n="procTitle">Process manager</h2>
+    <p data-i18n-html="procIntro">
+      <code>POST /run</code> waits for the command to finish — fine for quick
+      jobs, useless for daemons. <code>POST /spawn</code> starts a process and
+      returns immediately with its <strong>PID</strong>. The daemon tracks
+      every spawned PID, captures its output to a log file, and lets you stop
+      it from this page.
+    </p>
+
+    <div class="card">
+      <h3 style="margin-bottom:14px" data-i18n="procSpawnTitle">Spawn a process</h3>
+      <div class="input-row">
+        <input id="spawn-cmd"  type="text"
+               data-i18n-placeholder="procSpawnCmdPlaceholder"
+               placeholder="command (e.g. python3)" value="sh" />
+        <input id="spawn-args" type="text"
+               data-i18n-placeholder="procSpawnArgsPlaceholder"
+               placeholder='args space-separated' value='-c while true; do date; sleep 2; done' />
+        <button class="btn btn-primary" onclick="spawnProc()" data-i18n="procSpawnBtn">Spawn</button>
+      </div>
+      <p style="color:var(--muted);font-size:.78rem;margin:0" data-i18n-html="procSpawnHint">
+        Tip: for a shell pipeline use <code>sh</code> with <code>-c "…"</code>.
+        Output is captured to <code>~/.config/web2local/processes/</code>.
+      </p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0" data-i18n="procRunningTitle">Running processes</h3>
+        <button class="btn btn-ghost" style="font-size:.78rem;padding:5px 12px"
+                onclick="refreshProcs()" data-i18n="procRefreshBtn">Refresh</button>
+      </div>
+      <div id="proc-list"><span class="empty-list" data-i18n="demoLoading">Loading…</span></div>
+
+      <div id="proc-log-viewer">
+        <div class="proc-log-header">
+          <span data-i18n="procLogHeader">Process output (last 200 lines)</span>
+          <button class="btn-mini logs" onclick="hideProcLog()" data-i18n="procLogClose">Close</button>
+        </div>
+        <div id="proc-log-text"></div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer data-i18n="footerText">
@@ -651,7 +747,7 @@ if (await w2l.isRunning()) {
   const I18N = {
     en: {
       navHow: "How it works", navSecurity: "Security", navQuickstart: "Quick start",
-      navApi: "API", navDemo: "Demo",
+      navApi: "API", navDemo: "Demo", navProcesses: "Processes",
       navChecking: "checking…", navRunning: "daemon running", navOffline: "daemon offline",
 
       badge1: "No cloud. Runs locally.",
@@ -719,6 +815,10 @@ if (await w2l.isRunning()) {
       apiDesc6: "Remove origin from all lists.",
       apiDesc7: "Reload config from disk without restarting.",
       apiDesc8: "Return last 200 audit log lines.",
+      apiDesc9: 'Start a long-running process. Returns immediately with <code>{"pid":…, "started_at":"…", "log_path":"…"}</code>. Output is captured to the log file.',
+      apiDesc10: 'Stop a spawned process by PID. Body: <code>{"pid":1234}</code>. Sends SIGTERM, then SIGKILL after 3 s.',
+      apiDesc11: "List spawned processes still alive (verified via /proc start-time, so PID reuse won't fool it).",
+      apiDesc12: "Return the last 200 lines of a spawned process's captured output.",
       apiErrorsTitle: "Error responses",
       apiRulesTitle: "Command rules",
       apiRulesList: `<li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
@@ -752,12 +852,35 @@ if (await w2l.isRunning()) {
       demoRunning: "Running…",
       demoEnterCmd: "Enter a command first.",
 
+      procTitle: "Process manager",
+      procIntro: "<code>POST /run</code> waits for the command to finish — fine for quick jobs, useless for daemons. <code>POST /spawn</code> starts a process and returns immediately with its <strong>PID</strong>. The daemon tracks every spawned PID, captures its output to a log file, and lets you stop it from this page.",
+      procSpawnTitle: "Spawn a process",
+      procSpawnCmdPlaceholder: "command (e.g. python3)",
+      procSpawnArgsPlaceholder: "args space-separated",
+      procSpawnBtn: "Spawn",
+      procSpawnHint: 'Tip: for a shell pipeline use <code>sh</code> with <code>-c "…"</code>. Output is captured to <code>~/.config/web2local/processes/</code>.',
+      procRunningTitle: "Running processes",
+      procRefreshBtn: "Refresh",
+      procNone: "No spawned processes are running.",
+      procThPid: "PID",
+      procThCommand: "Command",
+      procThStarted: "Started",
+      procThOrigin: "Origin",
+      procBtnLogs: "Logs",
+      procBtnStop: "Stop",
+      procConfirmStop: "Stop",
+      procStoppedKilled: "Process did not exit on SIGTERM — sent SIGKILL.",
+      procSpawned: "Spawned —",
+      procLogHeader: "Process output (last 200 lines)",
+      procLogClose: "Close",
+      procLogEmpty: "(no output yet)",
+
       footerText: "web2local — runs on your machine, serves your websites.",
     },
 
     zh: {
       navHow: "工作原理", navSecurity: "安全机制", navQuickstart: "快速上手",
-      navApi: "API", navDemo: "演示",
+      navApi: "API", navDemo: "演示", navProcesses: "进程",
       navChecking: "检测中…", navRunning: "服务运行中", navOffline: "服务未启动",
 
       badge1: "无需云端 · 本地运行",
@@ -825,6 +948,10 @@ if (await w2l.isRunning()) {
       apiDesc6: "从两份名单中移除来源。",
       apiDesc7: "重新加载磁盘上的配置文件，无需重启服务。",
       apiDesc8: "返回最近 200 条审计日志。",
+      apiDesc9: '启动一个长时间运行的进程，立即返回 <code>{"pid":…, "started_at":"…", "log_path":"…"}</code>。进程的输出会写入日志文件。',
+      apiDesc10: '按 PID 停止已启动的进程。请求体：<code>{"pid":1234}</code>。先发送 SIGTERM，3 秒后未退出则改为 SIGKILL。',
+      apiDesc11: "列出仍在运行的已启动进程（通过 /proc 中的启动时间校验，避免 PID 复用造成的误判）。",
+      apiDesc12: "返回某个已启动进程最近 200 行的捕获输出。",
       apiErrorsTitle: "错误响应",
       apiRulesTitle: "命令规则",
       apiRulesList: `<li><code>command</code> 是可执行文件名——不经过 shell，不支持 <code>&&</code>，不支持管道。</li>
@@ -857,6 +984,29 @@ if (await w2l.isRunning()) {
       demoLogError: "无法加载日志。",
       demoRunning: "执行中…",
       demoEnterCmd: "请先输入命令。",
+
+      procTitle: "进程管理",
+      procIntro: "<code>POST /run</code> 会等待命令结束——适合短任务，但不适合后台服务。<code>POST /spawn</code> 启动进程后立即返回它的 <strong>PID</strong>。服务会追踪每个被启动的 PID、把它的输出写入日志，并允许你在本页将它停止。",
+      procSpawnTitle: "启动一个进程",
+      procSpawnCmdPlaceholder: "命令（例如 python3）",
+      procSpawnArgsPlaceholder: "参数，空格分隔",
+      procSpawnBtn: "启动",
+      procSpawnHint: '提示：要使用 shell 管道，请用 <code>sh</code> 加 <code>-c "…"</code>。输出会写入 <code>~/.config/web2local/processes/</code>。',
+      procRunningTitle: "正在运行的进程",
+      procRefreshBtn: "刷新",
+      procNone: "当前没有由 spawn 启动的进程在运行。",
+      procThPid: "PID",
+      procThCommand: "命令",
+      procThStarted: "启动时间",
+      procThOrigin: "来源",
+      procBtnLogs: "日志",
+      procBtnStop: "停止",
+      procConfirmStop: "停止",
+      procStoppedKilled: "SIGTERM 未能终止进程——已发送 SIGKILL。",
+      procSpawned: "已启动 ——",
+      procLogHeader: "进程输出（最近 200 行）",
+      procLogClose: "关闭",
+      procLogEmpty: "（暂无输出）",
 
       footerText: "web2local — 在你的电脑上运行，为你的网站服务。",
     },
@@ -911,9 +1061,10 @@ if (await w2l.isRunning()) {
       sdot.className    = "down";
       stext.textContent = t("demoNotDetected");
     }
-    // Always refresh lists and log so they reflect current daemon reachability.
+    // Always refresh lists, log, and process table so they reflect daemon state.
     refreshConfig();
     refreshLog();
+    refreshProcs();
   }
 
   // ── Run a command ─────────────────────────────────────────────────────────
@@ -1003,6 +1154,103 @@ if (await w2l.isRunning()) {
     } catch {
       el.textContent = t("demoListUnavailable");
     }
+  }
+
+  // ── Process manager ───────────────────────────────────────────────────────
+  async function spawnProc() {
+    const cmd  = document.getElementById("spawn-cmd").value.trim();
+    const args = parseArgs(document.getElementById("spawn-args").value);
+    if (!cmd) { alert(t("demoEnterCmd")); return; }
+    if (!(await w2l.isRunning())) { alert(t("demoNotDetected")); return; }
+    try {
+      const r = await w2l.spawn(cmd, args);
+      alert(t("procSpawned") + " PID " + r.pid);
+      refreshProcs();
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  }
+
+  // Parse a quoted command line into argv:  -c "echo hi" → ["-c", "echo hi"]
+  function parseArgs(line) {
+    const out = [];
+    const re  = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m;
+    while ((m = re.exec(line)) !== null) {
+      out.push(m[1] ?? m[2] ?? m[3]);
+    }
+    return out;
+  }
+
+  async function refreshProcs() {
+    const el = document.getElementById("proc-list");
+    let data;
+    try { data = await w2l.ps(); }
+    catch {
+      el.innerHTML = `<span class="empty-list">${t("demoListUnavailable")}</span>`;
+      return;
+    }
+    const procs = data.processes || [];
+    if (procs.length === 0) {
+      el.innerHTML = `<span class="empty-list">${t("procNone")}</span>`;
+      return;
+    }
+    el.innerHTML = `
+      <table class="proc-table">
+        <thead>
+          <tr>
+            <th>${t("procThPid")}</th>
+            <th>${t("procThCommand")}</th>
+            <th>${t("procThStarted")}</th>
+            <th>${t("procThOrigin")}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${procs.map(p => `
+            <tr>
+              <td class="mono pid">${p.pid}</td>
+              <td class="mono">${escapeHtml(p.command.join(" "))}</td>
+              <td>${p.started_at}</td>
+              <td class="mono" style="color:var(--muted)">${escapeHtml(p.origin || "")}</td>
+              <td>
+                <button class="btn-mini logs" onclick="showProcLog(${p.pid})">${t("procBtnLogs")}</button>
+                <button class="btn-mini stop" onclick="stopProc(${p.pid})">${t("procBtnStop")}</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  async function stopProc(pid) {
+    if (!confirm(t("procConfirmStop") + " PID " + pid + "?")) return;
+    try {
+      const r = await w2l.stop(pid);
+      refreshProcs();
+      if (r.status === "stopped" && r.signal === "SIGKILL") {
+        alert(t("procStoppedKilled"));
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  }
+
+  async function showProcLog(pid) {
+    const viewer = document.getElementById("proc-log-viewer");
+    const text   = document.getElementById("proc-log-text");
+    viewer.classList.add("visible");
+    text.textContent = t("demoLoading");
+    try {
+      const r = await w2l.tailLog(pid);
+      text.textContent = r.tail || t("procLogEmpty");
+      viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (e) {
+      text.textContent = "Error: " + e.message;
+    }
+  }
+
+  function hideProcLog() {
+    document.getElementById("proc-log-viewer").classList.remove("visible");
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────

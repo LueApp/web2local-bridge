@@ -105,6 +105,62 @@ class Web2Local {
     return r.json();
   }
 
+  /**
+   * Start a long-running process. Returns immediately with its PID.
+   * Output is captured to a log file the daemon can tail via tailLog().
+   *
+   * @param {string}   command
+   * @param {string[]} args
+   * @returns {Promise<{pid:number, started_at:string, log_path:string}>}
+   */
+  async spawn(command, args = []) {
+    const r = await fetch(`${this.base}/spawn`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ command, args }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  /**
+   * List processes spawned via spawn() that are still alive.
+   * @returns {Promise<{processes: Array}>}
+   */
+  async ps() {
+    const r = await fetch(`${this.base}/ps`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  /**
+   * Stop a process by PID. Sends SIGTERM, then SIGKILL after 3 s.
+   * @param {number} pid
+   * @returns {Promise<{status:string, signal?:string}>}
+   */
+  async stop(pid) {
+    const r = await fetch(`${this.base}/stop`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ pid }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  /**
+   * Tail the last 200 lines of a spawned process's output.
+   * @param {number} pid
+   * @returns {Promise<{pid:number, tail:string}>}
+   */
+  async tailLog(pid) {
+    const r = await fetch(`${this.base}/logs?pid=${encodeURIComponent(pid)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
   async _postConfig(path, body) {
     const r = await fetch(`${this.base}${path}`, {
       method:  "POST",

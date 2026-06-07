@@ -4,6 +4,7 @@
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -12,9 +13,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-CONFIG_DIR  = os.path.expanduser("~/.config/web2local")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-LOG_PATH    = os.path.join(CONFIG_DIR, "audit.log")
+CONFIG_DIR    = os.path.expanduser("~/.config/web2local")
+CONFIG_PATH   = os.path.join(CONFIG_DIR, "config.json")
+LOG_PATH      = os.path.join(CONFIG_DIR, "audit.log")
+PROC_DIR      = os.path.join(CONFIG_DIR, "processes")  # per-PID log files
+PROC_INDEX    = os.path.join(CONFIG_DIR, "processes.json")  # PID → metadata
 
 DEFAULT_CONFIG = {"port": 7878, "whitelist": [], "graylist": []}
 
@@ -59,6 +62,159 @@ def _audit(action: str, origin: str, command: list, outcome: str):
     line = f"{ts} | {action:<10} | {origin} | {json.dumps(command)} | {outcome}\n"
     with open(LOG_PATH, "a") as f:
         f.write(line)
+
+
+# ── Process registry ─────────────────────────────────────────────────────────
+# Long-running children are spawned non-blocking. Each is registered with its
+# PID, the start time we observed, the command, the origin that spawned it,
+# and a log file path. Liveness is checked on every /ps call.
+
+_proc_lock = threading.Lock()
+
+
+def _proc_starttime(pid: int):
+    """Return the kernel's recorded start_time for a PID, or None if it is gone.
+    Used to detect PID reuse — a fresh process at the same PID will have a
+    different start_time, so we treat it as not ours."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            data = f.read()
+        # /proc/<pid>/stat: pid (comm) state ppid ... — comm may contain spaces
+        # and parens, so split from the last ')' to safely skip it.
+        rest = data[data.rindex(")") + 2:].split()
+        return rest[19]  # field 22 (1-indexed) is starttime
+    except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+        return None
+
+
+def _proc_alive(pid: int, expected_starttime: str) -> bool:
+    """True only if pid exists AND start_time matches what we recorded."""
+    actual = _proc_starttime(pid)
+    return actual is not None and actual == expected_starttime
+
+
+def _proc_load() -> list:
+    if not os.path.exists(PROC_INDEX):
+        return []
+    try:
+        with open(PROC_INDEX) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _proc_save(entries: list):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(PROC_INDEX, "w") as f:
+        json.dump(entries, f, indent=2)
+
+
+def _proc_list_live() -> list:
+    """Return registry filtered to processes that are still alive.
+    Also prunes dead entries from the on-disk index."""
+    with _proc_lock:
+        entries = _proc_load()
+        live    = [e for e in entries if _proc_alive(e["pid"], e["starttime"])]
+        if len(live) != len(entries):
+            _proc_save(live)
+        return live
+
+
+def _proc_register(pid: int, starttime: str, cmd_list: list,
+                   origin: str, log_path: str):
+    entry = {
+        "pid":        pid,
+        "starttime":  starttime,
+        "command":    cmd_list,
+        "origin":     origin,
+        "log_path":   log_path,
+        "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    with _proc_lock:
+        entries = [e for e in _proc_load() if e["pid"] != pid]
+        entries.append(entry)
+        _proc_save(entries)
+    return entry
+
+
+def _proc_remove(pid: int):
+    with _proc_lock:
+        entries = [e for e in _proc_load() if e["pid"] != pid]
+        _proc_save(entries)
+
+
+def _proc_spawn(cmd_list: list, origin: str):
+    """Start a long-running process; return its registry entry."""
+    os.makedirs(PROC_DIR, exist_ok=True)
+    ts       = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = os.path.join(PROC_DIR, f"{ts}-{cmd_list[0].split('/')[-1]}.log")
+
+    # Open as line-buffered so /logs sees output promptly.
+    log_fh = open(log_path, "wb")
+
+    try:
+        proc = subprocess.Popen(
+            cmd_list,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # own session/process group, survives daemon
+            close_fds=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        raise
+
+    starttime = _proc_starttime(proc.pid) or ""
+    entry     = _proc_register(proc.pid, starttime, cmd_list, origin, log_path)
+    return entry
+
+
+def _proc_stop(pid: int) -> dict:
+    """Stop a registered process. SIGTERM, wait 3s, then SIGKILL its group."""
+    entries = _proc_list_live()
+    entry   = next((e for e in entries if e["pid"] == pid), None)
+    if not entry:
+        return {"status": "not_found"}
+
+    # Negative PID = whole process group (set up by start_new_session=True).
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        _proc_remove(pid)
+        return {"status": "already_gone"}
+
+    # Wait up to 3 s for graceful shutdown.
+    for _ in range(30):
+        if not _proc_alive(pid, entry["starttime"]):
+            _proc_remove(pid)
+            return {"status": "stopped", "signal": "SIGTERM"}
+        threading.Event().wait(0.1)
+
+    # Still alive — escalate.
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    _proc_remove(pid)
+    return {"status": "stopped", "signal": "SIGKILL"}
+
+
+def _proc_tail(log_path: str, lines: int = 200) -> str:
+    """Return the last N lines of a process log, or '' if missing."""
+    if not log_path or not os.path.exists(log_path):
+        return ""
+    # Simple tail — fine for small log sizes; we cap reads anyway.
+    with open(log_path, "rb") as f:
+        try:
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = min(size, 64 * 1024)
+            f.seek(size - chunk)
+            data = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            data = ""
+    return "\n".join(data.splitlines()[-lines:])
 
 
 # ── Graylist confirmation dialog ─────────────────────────────────────────────
@@ -309,7 +465,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         origin = self._origin()
-        path   = self.path.split("?")[0]
+        full   = self.path
+        path   = full.split("?")[0]
 
         if path == "/status":
             # Allow any origin — reveals no sensitive data, lets sites detect daemon.
@@ -333,6 +490,26 @@ class Handler(BaseHTTPRequestHandler):
                 with open(LOG_PATH) as f:
                     entries = [l.rstrip() for l in f.readlines()[-200:]]
             _send_json(self, 200, {"entries": entries}, origin)
+            return
+
+        if path == "/ps":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}); return
+            _send_json(self, 200, {"processes": _proc_list_live()}, origin)
+            return
+
+        if path == "/logs":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}); return
+            from urllib.parse import urlparse, parse_qs
+            q   = parse_qs(urlparse(full).query)
+            pid = int(q.get("pid", ["0"])[0] or 0)
+            entry = next((e for e in _proc_load() if e["pid"] == pid), None)
+            if not entry:
+                _send_json(self, 404, {"error": "unknown pid"}, origin); return
+            _send_json(self, 200,
+                       {"pid": pid, "tail": _proc_tail(entry["log_path"], 200)},
+                       origin)
             return
 
         self.send_response(404); self.end_headers()
@@ -383,6 +560,68 @@ class Handler(BaseHTTPRequestHandler):
             _update_config(cfg)
             _save_config(cfg)
             _send_json(self, 200, {"status": "removed"}, origin)
+            return
+
+        # ── /spawn — start a long-running process, return immediately ──
+
+        if path == "/spawn":
+            classification = self._classify(origin)
+            if not classification:
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                _audit("BLOCKED", origin or "unknown", [], "not_in_list")
+                return
+
+            command = data.get("command", "")
+            args    = data.get("args", [])
+            if not command or not isinstance(command, str):
+                _send_json(self, 400, {"error": "command must be a non-empty string"}, origin); return
+            if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+                _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
+
+            cmd_list = [command] + args
+
+            if classification == "graylist":
+                approved = _request_approval(origin, ["[spawn]"] + cmd_list)
+                if not approved:
+                    _send_json(self, 403, {"error": "spawn denied by user"}, origin)
+                    _audit("DENIED", origin, cmd_list, "spawn_denied_by_user")
+                    return
+                _audit("APPROVED", origin, cmd_list, "spawn_approved_by_user")
+            else:
+                _audit("ALLOWED", origin, cmd_list, "spawn_whitelist")
+
+            try:
+                entry = _proc_spawn(cmd_list, origin)
+                _send_json(self, 200, {
+                    "pid":        entry["pid"],
+                    "started_at": entry["started_at"],
+                    "log_path":   entry["log_path"],
+                }, origin)
+            except FileNotFoundError:
+                _send_json(self, 400, {"error": f"command not found: {command}"}, origin)
+                _audit("ERROR", origin, cmd_list, "spawn_command_not_found")
+            except OSError as e:
+                _send_json(self, 500, {"error": f"spawn failed: {e}"}, origin)
+                _audit("ERROR", origin, cmd_list, f"spawn_oserror:{e}")
+            return
+
+        # ── /stop — terminate a registered process ──
+
+        if path == "/stop":
+            classification = self._classify(origin)
+            if not classification:
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                return
+            try:
+                pid = int(data.get("pid", 0))
+            except (TypeError, ValueError):
+                _send_json(self, 400, {"error": "pid must be an integer"}, origin); return
+            if pid <= 0:
+                _send_json(self, 400, {"error": "missing or invalid pid"}, origin); return
+
+            result = _proc_stop(pid)
+            _audit("STOP", origin, [str(pid)], result.get("status", "?"))
+            _send_json(self, 200, result, origin)
             return
 
         # ── /run ──
