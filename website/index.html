@@ -708,7 +708,8 @@ if (await w2l.isRunning()) {
                placeholder="command (e.g. python3)" value="sh" />
         <input id="spawn-args" type="text"
                data-i18n-placeholder="procSpawnArgsPlaceholder"
-               placeholder='args space-separated' value='-c while true; do date; sleep 2; done' />
+               placeholder='args space-separated'
+               value="-c &quot;while true; do date; sleep 2; done&quot;" />
         <button class="btn btn-primary" onclick="spawnProc()" data-i18n="procSpawnBtn">Spawn</button>
       </div>
       <p style="color:var(--muted);font-size:.78rem;margin:0" data-i18n-html="procSpawnHint">
@@ -1182,6 +1183,17 @@ if (await w2l.isRunning()) {
     return out;
   }
 
+  // Render an argv list back to a readable command line, re-quoting args
+  // that contain spaces or shell-significant characters.
+  function formatArgv(argv) {
+    return argv.map(a => {
+      if (a === "" || /[\s"'`$()&|;<>*?#\\]/.test(a)) {
+        return '"' + a.replace(/(["\\])/g, "\\$1") + '"';
+      }
+      return a;
+    }).join(" ");
+  }
+
   async function refreshProcs() {
     const el = document.getElementById("proc-list");
     let data;
@@ -1210,7 +1222,7 @@ if (await w2l.isRunning()) {
           ${procs.map(p => `
             <tr>
               <td class="mono pid">${p.pid}</td>
-              <td class="mono">${escapeHtml(p.command.join(" "))}</td>
+              <td class="mono">${escapeHtml(formatArgv(p.command))}</td>
               <td>${p.started_at}</td>
               <td class="mono" style="color:var(--muted)">${escapeHtml(p.origin || "")}</td>
               <td>

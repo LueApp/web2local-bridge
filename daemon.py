@@ -72,25 +72,37 @@ def _audit(action: str, origin: str, command: list, outcome: str):
 _proc_lock = threading.Lock()
 
 
-def _proc_starttime(pid: int):
-    """Return the kernel's recorded start_time for a PID, or None if it is gone.
-    Used to detect PID reuse — a fresh process at the same PID will have a
-    different start_time, so we treat it as not ours."""
+def _proc_stat(pid: int):
+    """Return (state, starttime) from /proc/<pid>/stat, or (None, None) if gone."""
     try:
         with open(f"/proc/{pid}/stat") as f:
             data = f.read()
         # /proc/<pid>/stat: pid (comm) state ppid ... — comm may contain spaces
         # and parens, so split from the last ')' to safely skip it.
         rest = data[data.rindex(")") + 2:].split()
-        return rest[19]  # field 22 (1-indexed) is starttime
+        return rest[0], rest[19]  # state, starttime
     except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-        return None
+        return None, None
+
+
+def _proc_starttime(pid: int):
+    return _proc_stat(pid)[1]
 
 
 def _proc_alive(pid: int, expected_starttime: str) -> bool:
-    """True only if pid exists AND start_time matches what we recorded."""
-    actual = _proc_starttime(pid)
-    return actual is not None and actual == expected_starttime
+    """True only if pid exists, isn't a zombie, and start_time matches what we recorded.
+    Zombies count as dead — reap them on the spot so the slot frees up."""
+    state, actual = _proc_stat(pid)
+    if actual is None or actual != expected_starttime:
+        return False
+    if state == "Z":
+        # Reap so the kernel can recycle the PID.
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
+        return False
+    return True
 
 
 def _proc_load() -> list:
