@@ -25,7 +25,8 @@
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                   'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
       font-size: 15px;
       line-height: 1.65;
     }
@@ -47,6 +48,25 @@
     .nav-links { display: flex; gap: 28px; }
     .nav-links a { color: var(--muted); font-size: .9rem; }
     .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .nav-right { display: flex; align-items: center; gap: 14px; }
+
+    /* Language toggle */
+    .lang-toggle {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: .78rem;
+    }
+    .lang-toggle button {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--muted); padding: 4px 10px; font-family: inherit;
+      transition: background .15s, color .15s;
+    }
+    .lang-toggle button.active { background: var(--accent); color: #000; font-weight: 600; }
+    .lang-toggle button:hover:not(.active) { color: var(--text); }
+
     #daemon-pill {
       display: flex; align-items: center; gap: 7px;
       font-size: .8rem; color: var(--muted);
@@ -244,15 +264,21 @@
 <nav>
   <div class="nav-brand">web<span>2</span>local</div>
   <div class="nav-links">
-    <a href="#how">How it works</a>
-    <a href="#security">Security</a>
-    <a href="#quickstart">Quick start</a>
-    <a href="#api">API</a>
-    <a href="#demo">Demo</a>
+    <a href="#how"        data-i18n="navHow">How it works</a>
+    <a href="#security"   data-i18n="navSecurity">Security</a>
+    <a href="#quickstart" data-i18n="navQuickstart">Quick start</a>
+    <a href="#api"        data-i18n="navApi">API</a>
+    <a href="#demo"       data-i18n="navDemo">Demo</a>
   </div>
-  <div id="daemon-pill">
-    <div id="daemon-dot"></div>
-    <span id="daemon-label">checking…</span>
+  <div class="nav-right">
+    <div class="lang-toggle">
+      <button data-lang="en" onclick="setLang('en')">EN</button>
+      <button data-lang="zh" onclick="setLang('zh')">中</button>
+    </div>
+    <div id="daemon-pill">
+      <div id="daemon-dot"></div>
+      <span id="daemon-label" data-i18n="navChecking">checking…</span>
+    </div>
   </div>
 </nav>
 
@@ -261,12 +287,12 @@
   <!-- ── Hero ──────────────────────────────────────────────────────────────── -->
   <section id="hero">
     <div class="hero-badges">
-      <span class="badge"><span class="badge-dot"></span>No cloud. Runs locally.</span>
-      <span class="badge">Python · stdlib only</span>
-      <span class="badge">Whitelist &amp; graylist security</span>
+      <span class="badge"><span class="badge-dot"></span><span data-i18n="badge1">No cloud. Runs locally.</span></span>
+      <span class="badge" data-i18n="badge2">Python · stdlib only</span>
+      <span class="badge" data-i18n="badge3">Whitelist &amp; graylist security</span>
     </div>
-    <h1>Give your website<br>local machine power.</h1>
-    <p class="subtitle">
+    <h1><span data-i18n="heroLine1">Give your website</span><br><span data-i18n="heroLine2">local machine power.</span></h1>
+    <p class="subtitle" data-i18n="heroSubtitle">
       web2local is a tiny daemon that bridges websites to your local environment —
       safely. Your site can run commands, read files, and talk to hardware that
       a browser alone can never reach.
@@ -275,28 +301,28 @@
 
   <!-- ── How it works ──────────────────────────────────────────────────────── -->
   <section id="how">
-    <h2>How it works</h2>
-    <p>
+    <h2 data-i18n="howTitle">How it works</h2>
+    <p data-i18n-html="howP1">
       Browsers are sandboxed on purpose — a web page cannot touch your filesystem,
       run a process, or connect to a serial port without explicit permission. But
       some tools genuinely need local power: build scripts, hardware dashboards,
       developer utilities, media processors.
     </p>
-    <p>
+    <p data-i18n-html="howP2">
       web2local runs a small HTTP server bound to <code>127.0.0.1</code> only
       (never reachable from the internet). Your website calls it with
       <code>fetch()</code>. The daemon checks who is asking, then acts accordingly.
     </p>
 
     <div class="flow-row">
-      <div class="flow-box"><strong>Your website</strong>mysite.com</div>
+      <div class="flow-box"><strong data-i18n="flowSite">Your website</strong><span data-i18n="flowSiteSub">mysite.com</span></div>
       <div class="flow-arrow">──→</div>
-      <div class="flow-box"><strong>web2local daemon</strong>127.0.0.1:7878</div>
+      <div class="flow-box"><strong data-i18n="flowDaemon">web2local daemon</strong>127.0.0.1:7878</div>
       <div class="flow-arrow">──→</div>
-      <div class="flow-box"><strong>Local machine</strong>shell · files · hardware</div>
+      <div class="flow-box"><strong data-i18n="flowLocal">Local machine</strong><span data-i18n="flowLocalSub">shell · files · hardware</span></div>
     </div>
 
-    <p>
+    <p data-i18n-html="howP3">
       The daemon answers only to requests whose <code>Host</code> header is
       <code>127.0.0.1</code> or <code>localhost</code>. This one check kills the
       most dangerous class of localhost attacks — <strong>DNS rebinding</strong> —
@@ -305,17 +331,17 @@
     </p>
 
     <div class="warning">
-      <strong>Why Host header, not just CORS?</strong>
-      CORS controls which pages can <em>read</em> the response; the Host header
+      <strong data-i18n="warningTitle">Why Host header, not just CORS?</strong>
+      <span data-i18n-html="warningBody">CORS controls which pages can <em>read</em> the response; the Host header
       check prevents the request from being <em>accepted at all</em> if it arrived
-      via a DNS-rebound domain. They defend against different attacks.
+      via a DNS-rebound domain. They defend against different attacks.</span>
     </div>
   </section>
 
   <!-- ── Security model ────────────────────────────────────────────────────── -->
   <section id="security">
-    <h2>Security model</h2>
-    <p>
+    <h2 data-i18n="secTitle">Security model</h2>
+    <p data-i18n-html="secIntro">
       Every request carries an <code>Origin</code> header — the site that made it.
       The daemon classifies that origin into one of three tiers:
     </p>
@@ -323,50 +349,48 @@
     <div class="security-grid">
       <div class="sec-card white">
         <div class="sec-icon">✅</div>
-        <div class="sec-title">Whitelist</div>
-        <div class="sec-desc">
+        <div class="sec-title" data-i18n="secWhitelistTitle">Whitelist</div>
+        <div class="sec-desc"  data-i18n="secWhitelistDesc">
           Origins you fully trust. Commands execute immediately with no prompt.
           Use for your own sites.
         </div>
       </div>
       <div class="sec-card gray">
         <div class="sec-icon">⚠️</div>
-        <div class="sec-title">Graylist</div>
-        <div class="sec-desc">
+        <div class="sec-title" data-i18n="secGraylistTitle">Graylist</div>
+        <div class="sec-desc"  data-i18n="secGraylistDesc">
           Origins you want to evaluate. A native dialog shows the exact command.
           You read it, then allow or deny. Auto-denies after 120 s.
         </div>
       </div>
       <div class="sec-card block">
         <div class="sec-icon">🚫</div>
-        <div class="sec-title">Blocked</div>
-        <div class="sec-desc">
+        <div class="sec-title" data-i18n="secBlockedTitle">Blocked</div>
+        <div class="sec-desc"  data-i18n="secBlockedDesc">
           Any origin not on either list. Returns HTTP 403 immediately.
           No command is shown or executed.
         </div>
       </div>
     </div>
 
-    <h3>What the graylist dialog shows you</h3>
-    <p>
-      When a graylist site sends a command, a window appears with:
-    </p>
-    <ul style="margin: 0 0 16px 22px; color: var(--muted);">
+    <h3 data-i18n="secDialogTitle">What the graylist dialog shows you</h3>
+    <p data-i18n="secDialogIntro">When a graylist site sends a command, a window appears with:</p>
+    <ul style="margin: 0 0 16px 22px; color: var(--muted);" data-i18n-html="secDialogList">
       <li>The exact requesting origin (the website's URL)</li>
       <li>The full command in a scrollable monospace box — no truncation</li>
       <li>A countdown timer (auto-deny at zero)</li>
       <li>Two buttons: <strong style="color:var(--red)">Deny</strong> and <strong style="color:var(--green)">Allow Execution</strong></li>
     </ul>
-    <p>
+    <p data-i18n="secDialogP">
       The command is displayed as an argument list — no shell expansion happens.
       What you see is exactly what will run. Scroll right if it is long;
       the dialog will not dismiss until you click a button.
     </p>
 
-    <h3>What it does not protect against</h3>
+    <h3 data-i18n="secNotProtectTitle">What it does not protect against</h3>
     <div class="card">
-      <p style="margin-bottom:10px">The graylist is only as good as your reading. Keep these risks in mind:</p>
-      <ul style="margin: 0 0 0 20px; color: var(--muted);">
+      <p style="margin-bottom:10px" data-i18n="secNotProtectIntro">The graylist is only as good as your reading. Keep these risks in mind:</p>
+      <ul style="margin: 0 0 0 20px; color: var(--muted);" data-i18n-html="secNotProtectList">
         <li style="margin-bottom:6px"><strong style="color:var(--text)">Rubber-stamping</strong> — users who click Allow without reading are the weakest link.</li>
         <li style="margin-bottom:6px"><strong style="color:var(--text)">State accumulation</strong> — a site approved for 10 harmless commands may use their combined effect maliciously.</li>
         <li style="margin-bottom:6px"><strong style="color:var(--text)">Non-browser callers</strong> — <code>Origin</code> is only enforced by browsers. A script using <code>curl</code> can forge it. The daemon should only be used from browser-based websites.</li>
@@ -377,14 +401,14 @@
 
   <!-- ── Quick start ────────────────────────────────────────────────────────── -->
   <section id="quickstart">
-    <h2>Quick start</h2>
+    <h2 data-i18n="qsTitle">Quick start</h2>
     <div class="steps">
       <div class="step">
         <div class="step-num"></div>
         <div class="step-body">
-          <h3>Run the daemon</h3>
+          <h3 data-i18n="qs1Title">Run the daemon</h3>
           <pre><code>python3 daemon.py</code></pre>
-          <p>
+          <p data-i18n-html="qs1Body">
             The daemon binds to <code>127.0.0.1:7878</code> and stays running
             in your terminal. On the first launch it creates a config file at
             <code>~/.config/web2local/config.json</code>.
@@ -395,8 +419,8 @@
       <div class="step">
         <div class="step-num"></div>
         <div class="step-body">
-          <h3>Add your site to a list</h3>
-          <p>
+          <h3 data-i18n="qs2Title">Add your site to a list</h3>
+          <p data-i18n-html="qs2Body">
             You can do this from the <a href="#demo">demo below</a>, from the
             config file directly, or via the API:
           </p>
@@ -415,16 +439,16 @@ curl -s -X POST http://127.0.0.1:7878/config/graylist \
       <div class="step">
         <div class="step-num"></div>
         <div class="step-body">
-          <h3>Include the client library</h3>
+          <h3 data-i18n="qs3Title">Include the client library</h3>
           <pre><code>&lt;script src="client.js"&gt;&lt;/script&gt;</code></pre>
-          <p>Copy <code>client.js</code> from this repo into your project.</p>
+          <p data-i18n-html="qs3Body">Copy <code>client.js</code> from this repo into your project.</p>
         </div>
       </div>
 
       <div class="step">
         <div class="step-num"></div>
         <div class="step-body">
-          <h3>Call the API from your page</h3>
+          <h3 data-i18n="qs4Title">Call the API from your page</h3>
           <pre><code>const w2l = new Web2Local();   // default port 7878
 
 if (await w2l.isRunning()) {
@@ -441,67 +465,71 @@ if (await w2l.isRunning()) {
 
   <!-- ── API reference ─────────────────────────────────────────────────────── -->
   <section id="api">
-    <h2>API reference</h2>
-    <p>All endpoints are on <code>http://127.0.0.1:7878</code>.</p>
+    <h2 data-i18n="apiTitle">API reference</h2>
+    <p data-i18n-html="apiIntro">All endpoints are on <code>http://127.0.0.1:7878</code>.</p>
 
     <table class="endpoints">
       <thead>
-        <tr><th>Method &amp; Path</th><th>Auth</th><th>Description</th></tr>
+        <tr>
+          <th data-i18n="apiTh1">Method &amp; Path</th>
+          <th data-i18n="apiTh2">Auth</th>
+          <th data-i18n="apiTh3">Description</th>
+        </tr>
       </thead>
       <tbody>
         <tr>
           <td>GET /status</td>
-          <td>any origin</td>
-          <td>Returns <code>{"status":"running","version":"1.0.0"}</code>. Use this to detect the daemon.</td>
+          <td data-i18n="apiAuthAny">any origin</td>
+          <td data-i18n-html="apiDesc1">Returns <code>{"status":"running","version":"1.0.0"}</code>. Use this to detect the daemon.</td>
         </tr>
         <tr>
           <td>POST /run</td>
-          <td>whitelist / graylist</td>
-          <td>Execute a command. Body: <code>{"command":"ls","args":["-la"]}</code>.
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDesc2">Execute a command. Body: <code>{"command":"ls","args":["-la"]}</code>.
               Returns <code>{"stdout":"…","stderr":"…","exit_code":0}</code>.</td>
         </tr>
         <tr>
           <td>GET /config</td>
-          <td>any (local only)</td>
-          <td>Return current whitelist and graylist.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc3">Return current whitelist and graylist.</td>
         </tr>
         <tr>
           <td>POST /config/whitelist</td>
-          <td>any (local only)</td>
-          <td>Add origin to whitelist. Body: <code>{"origin":"https://…"}</code>.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n-html="apiDesc4">Add origin to whitelist. Body: <code>{"origin":"https://…"}</code>.</td>
         </tr>
         <tr>
           <td>POST /config/graylist</td>
-          <td>any (local only)</td>
-          <td>Add origin to graylist.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc5">Add origin to graylist.</td>
         </tr>
         <tr>
           <td>POST /config/remove</td>
-          <td>any (local only)</td>
-          <td>Remove origin from all lists.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc6">Remove origin from all lists.</td>
         </tr>
         <tr>
           <td>POST /config/reload</td>
-          <td>any (local only)</td>
-          <td>Reload config from disk without restarting.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc7">Reload config from disk without restarting.</td>
         </tr>
         <tr>
           <td>GET /log</td>
-          <td>any (local only)</td>
-          <td>Return last 200 audit log lines.</td>
+          <td data-i18n="apiAuthLocal">any (local only)</td>
+          <td data-i18n="apiDesc8">Return last 200 audit log lines.</td>
         </tr>
       </tbody>
     </table>
 
-    <h3>Error responses</h3>
+    <h3 data-i18n="apiErrorsTitle">Error responses</h3>
     <pre><code>403  {"error": "origin not in whitelist or graylist"}
 403  {"error": "command denied by user"}
 403  {"error": "host must be 127.0.0.1 or localhost"}
 400  {"error": "command must be a non-empty string"}
 408  {"error": "command timed out (30 s limit)"}</code></pre>
 
-    <h3>Command rules</h3>
-    <ul style="margin: 0 0 16px 22px; color: var(--muted);">
+    <h3 data-i18n="apiRulesTitle">Command rules</h3>
+    <ul style="margin: 0 0 16px 22px; color: var(--muted);" data-i18n-html="apiRulesList">
       <li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
       <li><code>args</code> is a flat list of strings — each element is one argument.</li>
       <li>Commands time out after 30 seconds.</li>
@@ -511,89 +539,320 @@ if (await w2l.isRunning()) {
 
   <!-- ── Live demo ─────────────────────────────────────────────────────────── -->
   <section id="demo">
-    <h2>Live demo</h2>
-    <p>This page connects to your local daemon in real time.</p>
+    <h2 data-i18n="demoTitle">Live demo</h2>
+    <p data-i18n="demoIntro">This page connects to your local daemon in real time.</p>
 
     <div id="demo-status">
       <div id="demo-status-dot"></div>
-      <span id="demo-status-text">Checking for daemon at 127.0.0.1:7878…</span>
+      <span id="demo-status-text" data-i18n="demoChecking">Checking for daemon at 127.0.0.1:7878…</span>
     </div>
 
     <!-- Run a command -->
     <div class="card">
-      <h3 style="margin-bottom:14px">Run a command</h3>
+      <h3 style="margin-bottom:14px" data-i18n="demoRunCmdTitle">Run a command</h3>
       <div class="input-row">
-        <input id="cmd-input"  type="text" placeholder="command (e.g. ls)"  value="ls" />
-        <input id="args-input" type="text" placeholder='args space-separated (e.g. -la /tmp)' value="-la /tmp" />
-        <button class="btn btn-primary" onclick="runCmd()">Run</button>
+        <input id="cmd-input"  type="text" data-i18n-placeholder="demoCmdPlaceholder"
+               placeholder="command (e.g. ls)"  value="ls" />
+        <input id="args-input" type="text" data-i18n-placeholder="demoArgsPlaceholder"
+               placeholder='args space-separated (e.g. -la /tmp)' value="-la /tmp" />
+        <button class="btn btn-primary" onclick="runCmd()" data-i18n="demoRunBtn">Run</button>
       </div>
-      <div id="demo-output" class="out-dim">Output will appear here.</div>
+      <div id="demo-output" class="out-dim" data-i18n="demoOutputPlaceholder">Output will appear here.</div>
     </div>
 
     <!-- Config manager -->
     <div class="card" style="margin-top:24px">
-      <h3 style="margin-bottom:16px">Manage lists</h3>
+      <h3 style="margin-bottom:16px" data-i18n="demoManageTitle">Manage lists</h3>
 
       <div class="list-section">
-        <div class="list-title">✅ Whitelist</div>
-        <div id="whitelist-items"><span class="empty-list">Loading…</span></div>
+        <div class="list-title" data-i18n="demoWhitelistLabel">✅ Whitelist</div>
+        <div id="whitelist-items"><span class="empty-list" data-i18n="demoLoading">Loading…</span></div>
       </div>
       <div class="list-section">
-        <div class="list-title">⚠️ Graylist</div>
-        <div id="graylist-items"><span class="empty-list">Loading…</span></div>
+        <div class="list-title" data-i18n="demoGraylistLabel">⚠️ Graylist</div>
+        <div id="graylist-items"><span class="empty-list" data-i18n="demoLoading">Loading…</span></div>
       </div>
 
       <div class="input-row" style="margin-top:16px">
         <input id="add-origin" type="text" placeholder="https://mysite.com" style="flex:2" />
-        <button class="btn btn-primary" onclick="addToList('whitelist')">+ Whitelist</button>
-        <button class="btn btn-ghost"   onclick="addToList('graylist')">+ Graylist</button>
+        <button class="btn btn-primary" onclick="addToList('whitelist')" data-i18n="demoAddWhitelistBtn">+ Whitelist</button>
+        <button class="btn btn-ghost"   onclick="addToList('graylist')"  data-i18n="demoAddGraylistBtn">+ Graylist</button>
       </div>
     </div>
 
     <!-- Audit log -->
     <div class="card" style="margin-top:24px">
-      <h3 style="margin-bottom:14px">Audit log <span style="color:var(--muted);font-weight:400;font-size:.85rem">(last 20 entries)</span></h3>
+      <h3 style="margin-bottom:14px">
+        <span data-i18n="demoAuditTitle">Audit log</span>
+        <span style="color:var(--muted);font-weight:400;font-size:.85rem" data-i18n="demoAuditNote">(last 20 entries)</span>
+      </h3>
       <div id="log-output" style="font-family:var(--mono);font-size:.78rem;color:var(--muted);
-           white-space:pre-wrap;max-height:200px;overflow-y:auto;">Loading…</div>
-      <button class="btn btn-ghost" style="margin-top:12px;font-size:.8rem" onclick="refreshLog()">Refresh</button>
+           white-space:pre-wrap;max-height:200px;overflow-y:auto;" data-i18n="demoLoading">Loading…</div>
+      <button class="btn btn-ghost" style="margin-top:12px;font-size:.8rem" onclick="refreshLog()" data-i18n="demoRefreshBtn">Refresh</button>
     </div>
   </section>
 
 </main>
 
-<footer>
+<footer data-i18n="footerText">
   web2local — runs on your machine, serves your websites.
 </footer>
 
 <script src="client.js"></script>
 <script>
-  const w2l = new Web2Local();
+  // ── i18n ──────────────────────────────────────────────────────────────────
+  const I18N = {
+    en: {
+      navHow: "How it works", navSecurity: "Security", navQuickstart: "Quick start",
+      navApi: "API", navDemo: "Demo",
+      navChecking: "checking…", navRunning: "daemon running", navOffline: "daemon offline",
+
+      badge1: "No cloud. Runs locally.",
+      badge2: "Python · stdlib only",
+      badge3: "Whitelist & graylist security",
+      heroLine1: "Give your website",
+      heroLine2: "local machine power.",
+      heroSubtitle: "web2local is a tiny daemon that bridges websites to your local environment — safely. Your site can run commands, read files, and talk to hardware that a browser alone can never reach.",
+
+      howTitle: "How it works",
+      howP1: "Browsers are sandboxed on purpose — a web page cannot touch your filesystem, run a process, or connect to a serial port without explicit permission. But some tools genuinely need local power: build scripts, hardware dashboards, developer utilities, media processors.",
+      howP2: "web2local runs a small HTTP server bound to <code>127.0.0.1</code> only (never reachable from the internet). Your website calls it with <code>fetch()</code>. The daemon checks who is asking, then acts accordingly.",
+      flowSite: "Your website", flowSiteSub: "mysite.com",
+      flowDaemon: "web2local daemon",
+      flowLocal: "Local machine", flowLocalSub: "shell · files · hardware",
+      howP3: "The daemon answers only to requests whose <code>Host</code> header is <code>127.0.0.1</code> or <code>localhost</code>. This one check kills the most dangerous class of localhost attacks — <strong>DNS rebinding</strong> — where a malicious site manipulates DNS to make the browser treat <code>evil.com</code> as a local address.",
+      warningTitle: "Why Host header, not just CORS?",
+      warningBody: "CORS controls which pages can <em>read</em> the response; the Host header check prevents the request from being <em>accepted at all</em> if it arrived via a DNS-rebound domain. They defend against different attacks.",
+
+      secTitle: "Security model",
+      secIntro: "Every request carries an <code>Origin</code> header — the site that made it. The daemon classifies that origin into one of three tiers:",
+      secWhitelistTitle: "Whitelist",
+      secWhitelistDesc: "Origins you fully trust. Commands execute immediately with no prompt. Use for your own sites.",
+      secGraylistTitle: "Graylist",
+      secGraylistDesc: "Origins you want to evaluate. A native dialog shows the exact command. You read it, then allow or deny. Auto-denies after 120 s.",
+      secBlockedTitle: "Blocked",
+      secBlockedDesc: "Any origin not on either list. Returns HTTP 403 immediately. No command is shown or executed.",
+      secDialogTitle: "What the graylist dialog shows you",
+      secDialogIntro: "When a graylist site sends a command, a window appears with:",
+      secDialogList: `<li>The exact requesting origin (the website's URL)</li>
+        <li>The full command in a scrollable monospace box — no truncation</li>
+        <li>A countdown timer (auto-deny at zero)</li>
+        <li>Two buttons: <strong style="color:var(--red)">Deny</strong> and <strong style="color:var(--green)">Allow Execution</strong></li>`,
+      secDialogP: "The command is displayed as an argument list — no shell expansion happens. What you see is exactly what will run. Scroll right if it is long; the dialog will not dismiss until you click a button.",
+      secNotProtectTitle: "What it does not protect against",
+      secNotProtectIntro: "The graylist is only as good as your reading. Keep these risks in mind:",
+      secNotProtectList: `<li style="margin-bottom:6px"><strong style="color:var(--text)">Rubber-stamping</strong> — users who click Allow without reading are the weakest link.</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">State accumulation</strong> — a site approved for 10 harmless commands may use their combined effect maliciously.</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">Non-browser callers</strong> — <code>Origin</code> is only enforced by browsers. A script using <code>curl</code> can forge it. The daemon should only be used from browser-based websites.</li>
+        <li><strong style="color:var(--text)">Broad whitelist scope</strong> — whitelisting <code>https://example.com</code> trusts every page on that domain.</li>`,
+
+      qsTitle: "Quick start",
+      qs1Title: "Run the daemon",
+      qs1Body: "The daemon binds to <code>127.0.0.1:7878</code> and stays running in your terminal. On the first launch it creates a config file at <code>~/.config/web2local/config.json</code>.",
+      qs2Title: "Add your site to a list",
+      qs2Body: 'You can do this from the <a href="#demo">demo below</a>, from the config file directly, or via the API:',
+      qs3Title: "Include the client library",
+      qs3Body: "Copy <code>client.js</code> from this repo into your project.",
+      qs4Title: "Call the API from your page",
+
+      apiTitle: "API reference",
+      apiIntro: "All endpoints are on <code>http://127.0.0.1:7878</code>.",
+      apiTh1: "Method & Path", apiTh2: "Auth", apiTh3: "Description",
+      apiAuthAny: "any origin", apiAuthListed: "whitelist / graylist", apiAuthLocal: "any (local only)",
+      apiDesc1: 'Returns <code>{"status":"running","version":"1.0.0"}</code>. Use this to detect the daemon.',
+      apiDesc2: 'Execute a command. Body: <code>{"command":"ls","args":["-la"]}</code>. Returns <code>{"stdout":"…","stderr":"…","exit_code":0}</code>.',
+      apiDesc3: "Return current whitelist and graylist.",
+      apiDesc4: 'Add origin to whitelist. Body: <code>{"origin":"https://…"}</code>.',
+      apiDesc5: "Add origin to graylist.",
+      apiDesc6: "Remove origin from all lists.",
+      apiDesc7: "Reload config from disk without restarting.",
+      apiDesc8: "Return last 200 audit log lines.",
+      apiErrorsTitle: "Error responses",
+      apiRulesTitle: "Command rules",
+      apiRulesList: `<li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
+        <li><code>args</code> is a flat list of strings — each element is one argument.</li>
+        <li>Commands time out after 30 seconds.</li>
+        <li>The process inherits the daemon's environment and working directory.</li>`,
+
+      demoTitle: "Live demo",
+      demoIntro: "This page connects to your local daemon in real time.",
+      demoChecking: "Checking for daemon at 127.0.0.1:7878…",
+      demoConnected: "Daemon connected at http://127.0.0.1:7878",
+      demoNotDetected: "Daemon not detected. Run: python3 daemon.py — then reload this page.",
+      demoRunCmdTitle: "Run a command",
+      demoCmdPlaceholder: "command (e.g. ls)",
+      demoArgsPlaceholder: "args space-separated (e.g. -la /tmp)",
+      demoRunBtn: "Run",
+      demoOutputPlaceholder: "Output will appear here.",
+      demoManageTitle: "Manage lists",
+      demoWhitelistLabel: "✅ Whitelist",
+      demoGraylistLabel: "⚠️ Graylist",
+      demoAddWhitelistBtn: "+ Whitelist",
+      demoAddGraylistBtn: "+ Graylist",
+      demoAuditTitle: "Audit log",
+      demoAuditNote: "(last 20 entries)",
+      demoRefreshBtn: "Refresh",
+      demoLoading: "Loading…",
+      demoListEmpty: "None",
+      demoLogEmpty: "(empty)",
+      demoLogError: "Could not load log.",
+      demoRunning: "Running…",
+      demoEnterCmd: "Enter a command first.",
+
+      footerText: "web2local — runs on your machine, serves your websites.",
+    },
+
+    zh: {
+      navHow: "工作原理", navSecurity: "安全机制", navQuickstart: "快速上手",
+      navApi: "API", navDemo: "演示",
+      navChecking: "检测中…", navRunning: "服务运行中", navOffline: "服务未启动",
+
+      badge1: "无需云端 · 本地运行",
+      badge2: "Python · 仅用标准库",
+      badge3: "白名单与灰名单防护",
+      heroLine1: "让你的网站",
+      heroLine2: "拥有本地计算机的能力。",
+      heroSubtitle: "web2local 是一个小巧的本地服务，安全地连接网页与你的本地环境。你的网站可以执行命令、读取文件、访问硬件——这些是浏览器单独无法做到的。",
+
+      howTitle: "工作原理",
+      howP1: "浏览器的沙箱机制是有意为之——网页默认无法访问文件系统、运行进程，或连接串口。但有些工具确实需要本地能力：构建脚本、硬件控制台、开发者工具、媒体处理等。",
+      howP2: "web2local 在你的电脑上运行一个只绑定到 <code>127.0.0.1</code> 的小型 HTTP 服务（外网无法访问）。你的网站通过 <code>fetch()</code> 调用它，服务会先识别请求来源再决定如何响应。",
+      flowSite: "你的网站", flowSiteSub: "mysite.com",
+      flowDaemon: "web2local 服务",
+      flowLocal: "本地计算机", flowLocalSub: "命令行 · 文件 · 硬件",
+      howP3: "服务只响应 <code>Host</code> 头为 <code>127.0.0.1</code> 或 <code>localhost</code> 的请求。这一项检查就足以挡住针对本地服务最危险的攻击——<strong>DNS 重绑定（DNS rebinding）</strong>：恶意站点通过操控 DNS，让浏览器把 <code>evil.com</code> 当作本地地址。",
+      warningTitle: "为什么是 Host 头，而不是只用 CORS？",
+      warningBody: "CORS 控制的是哪些页面可以<em>读取</em>响应；而 Host 头检查会让来自 DNS 重绑定域名的请求<em>根本无法被接受</em>。两者防护的是不同类型的攻击。",
+
+      secTitle: "安全模型",
+      secIntro: "每个请求都带有 <code>Origin</code> 头，标明发起它的网站。服务把这个来源归入三个级别之一：",
+      secWhitelistTitle: "白名单",
+      secWhitelistDesc: "你完全信任的来源。命令直接执行，不弹任何提示。适合你自己的网站。",
+      secGraylistTitle: "灰名单",
+      secGraylistDesc: "需要逐次确认的来源。每次执行前弹出对话框显示完整命令，由你决定允许或拒绝。120 秒后自动拒绝。",
+      secBlockedTitle: "拒绝",
+      secBlockedDesc: "任何不在两份名单上的来源。直接返回 HTTP 403，命令既不会显示也不会执行。",
+      secDialogTitle: "灰名单对话框会显示什么",
+      secDialogIntro: "当灰名单上的站点发起命令时，会弹出一个窗口，包含：",
+      secDialogList: `<li>精确的请求来源（网站 URL）</li>
+        <li>完整命令显示在可滚动的等宽文本框中——不截断</li>
+        <li>倒计时（归零时自动拒绝）</li>
+        <li>两个按钮：<strong style="color:var(--red)">拒绝</strong> 和 <strong style="color:var(--green)">允许执行</strong></li>`,
+      secDialogP: "命令以参数列表的形式展示——不进行 shell 展开。你看到的就是即将执行的内容。命令较长时可以横向滚动；在你点击按钮之前窗口不会关闭。",
+      secNotProtectTitle: "哪些情况它无法防护",
+      secNotProtectIntro: "灰名单的安全性取决于你是否真的看清了命令。请注意以下风险：",
+      secNotProtectList: `<li style="margin-bottom:6px"><strong style="color:var(--text)">无脑确认</strong>——不读命令就点允许是整个机制最薄弱的环节。</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">状态累积</strong>——一个站点连续获批 10 条无害命令后，可能利用它们的组合效果作恶。</li>
+        <li style="margin-bottom:6px"><strong style="color:var(--text)">非浏览器调用方</strong>——<code>Origin</code> 头只由浏览器强制设置。脚本（如 <code>curl</code>）可以伪造它。该服务应只用于浏览器中的网站。</li>
+        <li><strong style="color:var(--text)">白名单范围过宽</strong>——把 <code>https://example.com</code> 加入白名单意味着该域下所有页面都被信任。</li>`,
+
+      qsTitle: "快速上手",
+      qs1Title: "启动服务",
+      qs1Body: "服务绑定到 <code>127.0.0.1:7878</code>，运行后在终端中常驻。首次启动时会自动创建配置文件 <code>~/.config/web2local/config.json</code>。",
+      qs2Title: "把你的网站加入名单",
+      qs2Body: '可以通过<a href="#demo">下方的演示界面</a>、直接编辑配置文件，或调用 API 完成：',
+      qs3Title: "引入客户端库",
+      qs3Body: "把仓库中的 <code>client.js</code> 复制到你的项目里。",
+      qs4Title: "在网页中调用 API",
+
+      apiTitle: "API 参考",
+      apiIntro: "所有端点均位于 <code>http://127.0.0.1:7878</code>。",
+      apiTh1: "方法与路径", apiTh2: "授权", apiTh3: "说明",
+      apiAuthAny: "任意来源", apiAuthListed: "白名单 / 灰名单", apiAuthLocal: "任意（仅限本地）",
+      apiDesc1: '返回 <code>{"status":"running","version":"1.0.0"}</code>。用于检测服务是否运行。',
+      apiDesc2: '执行命令。请求体：<code>{"command":"ls","args":["-la"]}</code>。返回 <code>{"stdout":"…","stderr":"…","exit_code":0}</code>。',
+      apiDesc3: "返回当前的白名单与灰名单。",
+      apiDesc4: '把来源加入白名单。请求体：<code>{"origin":"https://…"}</code>。',
+      apiDesc5: "把来源加入灰名单。",
+      apiDesc6: "从两份名单中移除来源。",
+      apiDesc7: "重新加载磁盘上的配置文件，无需重启服务。",
+      apiDesc8: "返回最近 200 条审计日志。",
+      apiErrorsTitle: "错误响应",
+      apiRulesTitle: "命令规则",
+      apiRulesList: `<li><code>command</code> 是可执行文件名——不经过 shell，不支持 <code>&&</code>，不支持管道。</li>
+        <li><code>args</code> 是字符串列表——每个元素对应一个参数。</li>
+        <li>命令 30 秒后自动超时。</li>
+        <li>子进程继承服务的环境变量和工作目录。</li>`,
+
+      demoTitle: "实时演示",
+      demoIntro: "本页面会实时连接到你的本地服务。",
+      demoChecking: "正在检测 127.0.0.1:7878 上的服务…",
+      demoConnected: "已连接到 http://127.0.0.1:7878",
+      demoNotDetected: "未检测到服务。请运行 python3 daemon.py，然后刷新本页。",
+      demoRunCmdTitle: "执行命令",
+      demoCmdPlaceholder: "命令（例如 ls）",
+      demoArgsPlaceholder: "参数，空格分隔（例如 -la /tmp）",
+      demoRunBtn: "执行",
+      demoOutputPlaceholder: "输出会显示在这里。",
+      demoManageTitle: "管理名单",
+      demoWhitelistLabel: "✅ 白名单",
+      demoGraylistLabel: "⚠️ 灰名单",
+      demoAddWhitelistBtn: "+ 白名单",
+      demoAddGraylistBtn: "+ 灰名单",
+      demoAuditTitle: "审计日志",
+      demoAuditNote: "（最近 20 条）",
+      demoRefreshBtn: "刷新",
+      demoLoading: "加载中…",
+      demoListEmpty: "无",
+      demoLogEmpty: "（空）",
+      demoLogError: "无法加载日志。",
+      demoRunning: "执行中…",
+      demoEnterCmd: "请先输入命令。",
+
+      footerText: "web2local — 在你的电脑上运行，为你的网站服务。",
+    },
+  };
+
+  let CUR_LANG = "en";
+  function t(key) { return (I18N[CUR_LANG] && I18N[CUR_LANG][key]) ?? I18N.en[key] ?? key; }
+
+  function setLang(lang) {
+    if (!I18N[lang]) lang = "en";
+    CUR_LANG = lang;
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    localStorage.setItem("w2l-lang", lang);
+
+    document.querySelectorAll("[data-i18n]").forEach(el => {
+      const v = I18N[lang][el.dataset.i18n];
+      if (v !== undefined) el.textContent = v;
+    });
+    document.querySelectorAll("[data-i18n-html]").forEach(el => {
+      const v = I18N[lang][el.dataset.i18nHtml];
+      if (v !== undefined) el.innerHTML = v;
+    });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
+      const v = I18N[lang][el.dataset.i18nPlaceholder];
+      if (v !== undefined) el.placeholder = v;
+    });
+    document.querySelectorAll(".lang-toggle button").forEach(b => {
+      b.classList.toggle("active", b.dataset.lang === lang);
+    });
+
+    // Re-render dynamic content that depends on language
+    checkDaemon();
+    refreshConfig();
+    refreshLog();
+  }
 
   // ── Daemon status indicator ───────────────────────────────────────────────
+  const w2l = new Web2Local();
+
   async function checkDaemon() {
     const running = await w2l.isRunning();
 
-    // Nav pill
     const dot   = document.getElementById("daemon-dot");
     const label = document.getElementById("daemon-label");
-    dot.className   = running ? "up" : "down";
-    label.textContent = running ? "daemon running" : "daemon offline";
+    dot.className     = running ? "up" : "down";
+    label.textContent = running ? t("navRunning") : t("navOffline");
 
-    // Demo status bar
     const sdot  = document.getElementById("demo-status-dot");
     const stext = document.getElementById("demo-status-text");
     if (running) {
       sdot.className    = "up";
-      stext.textContent = "Daemon connected at http://127.0.0.1:7878";
+      stext.textContent = t("demoConnected");
     } else {
       sdot.className    = "down";
-      stext.textContent =
-        "Daemon not detected. Run: python3 daemon.py — then reload this page.";
-    }
-
-    if (running) {
-      refreshConfig();
-      refreshLog();
+      stext.textContent = t("demoNotDetected");
     }
   }
 
@@ -604,9 +863,9 @@ if (await w2l.isRunning()) {
                    .split(/\s+/).filter(Boolean);
     const out  = document.getElementById("demo-output");
 
-    if (!cmd) { out.textContent = "Enter a command first."; return; }
+    if (!cmd) { out.textContent = t("demoEnterCmd"); return; }
     out.className   = "out-dim";
-    out.textContent = "Running…";
+    out.textContent = t("demoRunning");
 
     try {
       const r = await w2l.run(cmd, args);
@@ -628,14 +887,14 @@ if (await w2l.isRunning()) {
   async function refreshConfig() {
     let cfg;
     try { cfg = await w2l.getConfig(); } catch { return; }
-    renderList("whitelist-items", cfg.whitelist, "whitelist");
-    renderList("graylist-items",  cfg.graylist,  "graylist");
+    renderList("whitelist-items", cfg.whitelist);
+    renderList("graylist-items",  cfg.graylist);
   }
 
-  function renderList(elementId, items, listType) {
+  function renderList(elementId, items) {
     const el = document.getElementById(elementId);
     if (!items || items.length === 0) {
-      el.innerHTML = '<span class="empty-list">None</span>';
+      el.innerHTML = `<span class="empty-list">${t("demoListEmpty")}</span>`;
       return;
     }
     el.innerHTML = items.map(o => `
@@ -670,10 +929,10 @@ if (await w2l.isRunning()) {
     const el = document.getElementById("log-output");
     try {
       const { entries } = await w2l.getLog();
-      el.textContent = entries.slice(-20).join("\n") || "(empty)";
+      el.textContent = entries.slice(-20).join("\n") || t("demoLogEmpty");
       el.scrollTop   = el.scrollHeight;
     } catch {
-      el.textContent = "Could not load log.";
+      el.textContent = t("demoLogError");
     }
   }
 
@@ -683,7 +942,7 @@ if (await w2l.isRunning()) {
             .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
-  // Run command on Enter in args input
+  // ── Init ──────────────────────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("args-input").addEventListener("keydown", e => {
       if (e.key === "Enter") runCmd();
@@ -691,8 +950,13 @@ if (await w2l.isRunning()) {
     document.getElementById("cmd-input").addEventListener("keydown", e => {
       if (e.key === "Enter") runCmd();
     });
-    checkDaemon();
-    setInterval(checkDaemon, 10000);  // re-check every 10 s
+
+    // Choose initial language: localStorage > browser preference > en
+    const saved = localStorage.getItem("w2l-lang");
+    const browserZh = (navigator.language || "").toLowerCase().startsWith("zh");
+    setLang(saved || (browserZh ? "zh" : "en"));
+
+    setInterval(checkDaemon, 10000);
   });
 </script>
 </body>
