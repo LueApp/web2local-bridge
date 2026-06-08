@@ -213,12 +213,15 @@
       padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border);
     }
     .proc-table th { color: var(--muted); font-size: .72rem; text-transform: uppercase; font-weight: 600; }
-    .proc-table td.mono { font-family: var(--mono); }
-    .proc-table td.pid { color: #79c0ff; }
+    .proc-table td.mono { font-family: var(--mono); word-break: break-all; }
+    .proc-table td.pid { color: #79c0ff; white-space: nowrap; }
+    .proc-table td.actions { white-space: nowrap; text-align: right; width: 1%; }
+    .proc-table td.nowrap { white-space: nowrap; }
     .proc-table tr:last-child td { border-bottom: none; }
     .btn-mini {
       padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer;
       font-size: .75rem; font-weight: 600; margin-right: 4px;
+      white-space: nowrap;
     }
     .btn-mini.stop { background: var(--red);    color: #fff; }
     .btn-mini.logs { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
@@ -1230,9 +1233,9 @@ if (await w2l.isRunning()) {
             <tr>
               <td class="mono pid">${p.pid}</td>
               <td class="mono">${escapeHtml(formatArgv(p.command))}</td>
-              <td>${p.started_at}</td>
+              <td class="nowrap">${p.started_at}</td>
               <td class="mono" style="color:var(--muted)">${escapeHtml(p.origin || "")}</td>
-              <td>
+              <td class="actions">
                 <button class="btn-mini logs" onclick="showProcLog(${p.pid})">${t("procBtnLogs")}</button>
                 <button class="btn-mini stop" onclick="stopProc(${p.pid})">${t("procBtnStop")}</button>
               </td>
