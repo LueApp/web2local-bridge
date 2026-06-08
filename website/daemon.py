@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -260,6 +261,33 @@ def _read_script_preview(cmd_list: list) -> dict | None:
     }
 
 
+def _open_in_editor(path: str):
+    """Open a file in the system's default application. Best-effort, never raises."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path], close_fds=True)
+        elif os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", path], close_fds=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, FileNotFoundError):
+        pass
+
+
+def _open_text_in_editor(text: str, filename_hint: str = "script.py"):
+    """Write text to a temp file and open it. Used for deploy preview where the
+    script hasn't been written to its real path yet."""
+    try:
+        suffix = "." + filename_hint.rsplit(".", 1)[-1] if "." in filename_hint else ".txt"
+        fd, tmp = tempfile.mkstemp(prefix="web2local-preview-", suffix=suffix)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        _open_in_editor(tmp)
+    except OSError:
+        pass
+
+
 # ── Agent delivery ───────────────────────────────────────────────────────────
 
 def _deploy_resolve(filename: str, sha256: str) -> str:
@@ -345,7 +373,7 @@ def _show_tk_dialog(tk, root, item):
     dlg.title("web2local — Command Approval")
     dlg.resizable(True, True)
     dlg.attributes("-topmost", True)
-    dlg.minsize(560, 400)
+    dlg.minsize(720, 460)
 
     # Header bar
     hdr = tk.Frame(dlg, bg="#1a1a2e", pady=14)
@@ -356,16 +384,17 @@ def _show_tk_dialog(tk, root, item):
     body = tk.Frame(dlg, padx=22, pady=12)
     body.pack(fill="both", expand=True)
 
-    tk.Label(body, text="Requesting website:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
-    tk.Label(body, text=origin, fg="#d4860a", font=("Courier", 10), anchor="w").pack(fill="x", pady=(0, 12))
+    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), anchor="w").pack(fill="x", pady=(0, 12))
 
-    tk.Label(body, text="Command to execute:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
+    tk.Label(body, text="Command to execute:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
 
     frm = tk.Frame(body, relief="sunken", bd=1)
     frm.pack(fill="x", pady=(4, 0))
 
     txt  = tk.Text(frm, font=("Courier", 10), height=4, wrap="none",
-                   bg="#1e1e1e", fg="#d4d4d4")
+                   bg="#0d1117", fg="#f0f6fc", insertbackground="#f0f6fc",
+                   padx=10, pady=8)
     sb_y = tk.Scrollbar(frm, orient="vertical",   command=txt.yview)
     sb_x = tk.Scrollbar(frm, orient="horizontal", command=txt.xview)
     txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
@@ -384,7 +413,7 @@ def _show_tk_dialog(tk, root, item):
 
     # ── Script preview (optional) ──────────────────────────────────────
     if preview:
-        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(10, 8))
+        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(12, 10))
 
         toggle_row = tk.Frame(body, bg=body["bg"])
         toggle_row.pack(fill="x")
@@ -392,16 +421,37 @@ def _show_tk_dialog(tk, root, item):
         pf       = tk.Frame(body)
         pf_shown = [False]
 
-        src_txt = tk.Text(pf, font=("Courier", 9), height=16, wrap="none",
-                          bg="#0d1117", fg="#c9d1d9")
-        sb_sy   = tk.Scrollbar(pf, orient="vertical",   command=src_txt.yview)
-        sb_sx   = tk.Scrollbar(pf, orient="horizontal", command=src_txt.xview)
+        # Path label (above the source box) — shows what file is being previewed
+        path_row = tk.Frame(pf, bg=body["bg"])
+        path_row.pack(fill="x", pady=(0, 4))
+        tk.Label(path_row, text="File:", font=("Arial", 10, "bold"),
+                 fg="#e6edf3", bg=body["bg"]).pack(side="left")
+        tk.Label(path_row, text=preview["path"].replace(os.path.expanduser("~"), "~"),
+                 font=("Courier", 10), fg="#a5d6ff", bg=body["bg"]).pack(side="left", padx=(6, 0))
+
+        src_box = tk.Frame(pf, relief="solid", bd=1, bg="#30363d")
+        src_box.pack(fill="both", expand=True)
+
+        src_txt = tk.Text(src_box, font=("Courier", 11), height=18, wrap="none",
+                          bg="#0d1117", fg="#f0f6fc",
+                          insertbackground="#f0f6fc",
+                          padx=12, pady=10, spacing1=1, spacing3=1, bd=0)
+        sb_sy   = tk.Scrollbar(src_box, orient="vertical",   command=src_txt.yview)
+        sb_sx   = tk.Scrollbar(src_box, orient="horizontal", command=src_txt.xview)
         src_txt.configure(yscrollcommand=sb_sy.set, xscrollcommand=sb_sx.set)
-        src_txt.insert("end", preview["source"])
+
+        # Insert source with line numbers for readability
+        src_lines = preview["source"].splitlines() or [""]
+        width     = len(str(len(src_lines)))
+        for i, ln in enumerate(src_lines, 1):
+            src_txt.insert("end", f"{str(i).rjust(width)} │ ", "ln")
+            src_txt.insert("end", ln + "\n")
         if preview["too_long"]:
             src_txt.insert("end",
-                f"\n\n… {preview['line_count'] - 100} more lines not shown. "
-                "Open the file directly to review the full script.")
+                f"\n… {preview['line_count'] - 100} more lines not shown. "
+                "Click 'Open in editor' to view the full file.", "note")
+        src_txt.tag_configure("ln",   foreground="#6e7681")
+        src_txt.tag_configure("note", foreground="#e3b341", font=("Courier", 10, "italic"))
         src_txt.config(state="disabled")
         sb_sy.pack(side="right",  fill="y")
         sb_sx.pack(side="bottom", fill="x")
@@ -413,7 +463,7 @@ def _show_tk_dialog(tk, root, item):
                 toggle_btn.config(text=f"▶  Show script  ({preview['line_count']} lines)")
                 pf_shown[0] = False
             else:
-                pf.pack(fill="both", expand=True, pady=(6, 0))
+                pf.pack(fill="both", expand=True, pady=(8, 0))
                 toggle_btn.config(text=f"▼  Hide script  ({preview['line_count']} lines)")
                 pf_shown[0] = True
 
@@ -421,11 +471,22 @@ def _show_tk_dialog(tk, root, item):
             toggle_row,
             text=f"▶  Show script  ({preview['line_count']} lines)",
             command=_toggle_preview,
-            bg=body["bg"], fg="#58a6ff", relief="flat",
-            font=("Arial", 9, "bold"), anchor="w", cursor="hand2",
-            activebackground=body["bg"], activeforeground="#79c0ff",
+            bg=body["bg"], fg="#79c0ff", relief="flat",
+            font=("Arial", 11, "bold"), anchor="w", cursor="hand2",
+            activebackground=body["bg"], activeforeground="#a5d6ff",
+            padx=0,
         )
         toggle_btn.pack(side="left")
+
+        # "Open in editor" — uses the OS default for .py / .sh files
+        def _open_file():
+            _open_in_editor(preview["path"])
+        tk.Button(
+            toggle_row, text="↗  Open in editor", command=_open_file,
+            bg="#21262d", fg="#79c0ff", relief="flat",
+            font=("Arial", 10, "bold"), padx=12, pady=4, cursor="hand2",
+            activebackground="#30363d", activeforeground="#a5d6ff",
+        ).pack(side="left", padx=(12, 0))
 
         if preview["too_long"]:
             def _pause():
@@ -435,7 +496,8 @@ def _show_tk_dialog(tk, root, item):
             pause_btn = tk.Button(
                 toggle_row, text="⏸  Pause auto-deny", command=_pause,
                 bg="#2d3748", fg="#e3b341", relief="flat",
-                font=("Arial", 9), padx=10, cursor="hand2",
+                font=("Arial", 10, "bold"), padx=12, pady=4, cursor="hand2",
+                activebackground="#3d4758", activeforeground="#f6c443",
             )
             pause_btn.pack(side="right")
 
@@ -509,7 +571,7 @@ def _show_deploy_tk_dialog(tk, root, item):
     dlg.title("web2local — Script Deploy & Run Approval")
     dlg.resizable(True, True)
     dlg.attributes("-topmost", True)
-    dlg.minsize(620, 480)
+    dlg.minsize(760, 620)
 
     # Header
     hdr = tk.Frame(dlg, bg="#2d1a4a", pady=14)
@@ -521,27 +583,28 @@ def _show_deploy_tk_dialog(tk, root, item):
     body.pack(fill="both", expand=True)
 
     # Requesting site
-    tk.Label(body, text="Requesting website:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
-    tk.Label(body, text=origin, fg="#d4860a", font=("Courier", 10), anchor="w").pack(fill="x", pady=(0, 10))
+    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), anchor="w").pack(fill="x", pady=(0, 10))
 
     # File info grid
     info = tk.Frame(body, bg=body["bg"])
     info.pack(fill="x", pady=(0, 10))
 
     def _row(label, value, selectable=False):
-        tk.Label(info, text=label, font=("Arial", 9, "bold"), anchor="w",
-                 bg=body["bg"], width=14, justify="left").grid(
-            row=_row.n, column=0, sticky="nw", pady=2)
+        tk.Label(info, text=label, font=("Arial", 10, "bold"), anchor="w",
+                 fg="#e6edf3", bg=body["bg"], width=14, justify="left").grid(
+            row=_row.n, column=0, sticky="nw", pady=4)
         if selectable:
-            e = tk.Entry(info, font=("Courier", 9), bg="#1e1e1e", fg="#a5d6ff",
-                         relief="flat", readonlybackground="#1e1e1e", width=60)
+            e = tk.Entry(info, font=("Courier", 10, "bold"), bg="#0d1117", fg="#a5d6ff",
+                         relief="flat", readonlybackground="#0d1117", width=64,
+                         insertbackground="#a5d6ff")
             e.insert(0, value)
             e.config(state="readonly")
-            e.grid(row=_row.n, column=1, sticky="ew", padx=(6, 0), pady=2)
+            e.grid(row=_row.n, column=1, sticky="ew", padx=(8, 0), pady=4)
         else:
-            tk.Label(info, text=value, font=("Courier", 9), anchor="w",
-                     fg="#c9d1d9", bg=body["bg"], wraplength=430, justify="left").grid(
-                row=_row.n, column=1, sticky="w", padx=(6, 0), pady=2)
+            tk.Label(info, text=value, font=("Courier", 10), anchor="w",
+                     fg="#f0f6fc", bg=body["bg"], wraplength=520, justify="left").grid(
+                row=_row.n, column=1, sticky="w", padx=(8, 0), pady=4)
         _row.n += 1
 
     _row.n = 0
@@ -551,12 +614,14 @@ def _show_deploy_tk_dialog(tk, root, item):
     _row("Destination:", dest_path.replace(os.path.expanduser("~"), "~"))
 
     # Command box
-    tk.Label(body, text="Command to run:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
-    frm = tk.Frame(body, relief="sunken", bd=1)
-    frm.pack(fill="both", expand=True, pady=(4, 0))
+    tk.Label(body, text="Command to run:", font=("Arial", 11, "bold"),
+             fg="#e6edf3", anchor="w").pack(fill="x")
+    frm = tk.Frame(body, relief="solid", bd=1, bg="#30363d")
+    frm.pack(fill="x", pady=(4, 0))
 
-    txt  = tk.Text(frm, font=("Courier", 10), height=4, wrap="none",
-                   bg="#1e1e1e", fg="#d4d4d4")
+    txt  = tk.Text(frm, font=("Courier", 11), height=4, wrap="none",
+                   bg="#0d1117", fg="#f0f6fc", insertbackground="#f0f6fc",
+                   padx=10, pady=8, bd=0)
     sb_x = tk.Scrollbar(frm, orient="horizontal", command=txt.xview)
     txt.configure(xscrollcommand=sb_x.set)
     display = " ".join(
@@ -569,12 +634,12 @@ def _show_deploy_tk_dialog(tk, root, item):
 
     # ── Source preview (always shown for deploy) ──────────────────────
     if source:
-        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(10, 8))
+        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(12, 10))
 
-        src_lines  = source.splitlines()
-        line_count = len(src_lines)
-        too_long   = line_count > 100
-        display_src = "\n".join(src_lines[:100]) if too_long else source
+        src_all_lines = source.splitlines() or [""]
+        line_count    = len(src_all_lines)
+        too_long      = line_count > 100
+        display_lines = src_all_lines[:100] if too_long else src_all_lines
 
         preview_row = tk.Frame(body, bg=body["bg"])
         preview_row.pack(fill="x")
@@ -582,21 +647,32 @@ def _show_deploy_tk_dialog(tk, root, item):
         pf       = tk.Frame(body)
         pf_shown = [True]   # expanded by default for deploy
 
-        src_txt = tk.Text(pf, font=("Courier", 9), height=16, wrap="none",
-                          bg="#0d1117", fg="#c9d1d9")
-        sb_sy   = tk.Scrollbar(pf, orient="vertical",   command=src_txt.yview)
-        sb_sx   = tk.Scrollbar(pf, orient="horizontal", command=src_txt.xview)
+        src_box = tk.Frame(pf, relief="solid", bd=1, bg="#30363d")
+        src_box.pack(fill="both", expand=True)
+
+        src_txt = tk.Text(src_box, font=("Courier", 11), height=18, wrap="none",
+                          bg="#0d1117", fg="#f0f6fc",
+                          insertbackground="#f0f6fc",
+                          padx=12, pady=10, spacing1=1, spacing3=1, bd=0)
+        sb_sy   = tk.Scrollbar(src_box, orient="vertical",   command=src_txt.yview)
+        sb_sx   = tk.Scrollbar(src_box, orient="horizontal", command=src_txt.xview)
         src_txt.configure(yscrollcommand=sb_sy.set, xscrollcommand=sb_sx.set)
-        src_txt.insert("end", display_src)
+
+        num_width = len(str(len(display_lines)))
+        for i, ln in enumerate(display_lines, 1):
+            src_txt.insert("end", f"{str(i).rjust(num_width)} │ ", "ln")
+            src_txt.insert("end", ln + "\n")
         if too_long:
             src_txt.insert("end",
-                f"\n\n… {line_count - 100} more lines not shown. "
-                "Open the file directly to review the full script.")
+                f"\n… {line_count - 100} more lines not shown. "
+                "Click 'Open in editor' to review the full script.", "note")
+        src_txt.tag_configure("ln",   foreground="#6e7681")
+        src_txt.tag_configure("note", foreground="#e3b341", font=("Courier", 10, "italic"))
         src_txt.config(state="disabled")
         sb_sy.pack(side="right",  fill="y")
         sb_sx.pack(side="bottom", fill="x")
         src_txt.pack(fill="both", expand=True)
-        pf.pack(fill="both", expand=True, pady=(6, 0))
+        pf.pack(fill="both", expand=True, pady=(8, 0))
 
         def _toggle_src():
             if pf_shown[0]:
@@ -604,7 +680,7 @@ def _show_deploy_tk_dialog(tk, root, item):
                 toggle_src_btn.config(text=f"▶  Show script source  ({line_count} lines)")
                 pf_shown[0] = False
             else:
-                pf.pack(fill="both", expand=True, pady=(6, 0))
+                pf.pack(fill="both", expand=True, pady=(8, 0))
                 toggle_src_btn.config(text=f"▼  Hide script source  ({line_count} lines)")
                 pf_shown[0] = True
 
@@ -612,11 +688,22 @@ def _show_deploy_tk_dialog(tk, root, item):
             preview_row,
             text=f"▼  Hide script source  ({line_count} lines)",
             command=_toggle_src,
-            bg=body["bg"], fg="#58a6ff", relief="flat",
-            font=("Arial", 9, "bold"), anchor="w", cursor="hand2",
-            activebackground=body["bg"], activeforeground="#79c0ff",
+            bg=body["bg"], fg="#79c0ff", relief="flat",
+            font=("Arial", 11, "bold"), anchor="w", cursor="hand2",
+            activebackground=body["bg"], activeforeground="#a5d6ff",
+            padx=0,
         )
         toggle_src_btn.pack(side="left")
+
+        # "Open in editor" — writes source to a temp file and opens it
+        def _open_deploy_src():
+            _open_text_in_editor(source, filename)
+        tk.Button(
+            preview_row, text="↗  Open in editor", command=_open_deploy_src,
+            bg="#21262d", fg="#79c0ff", relief="flat",
+            font=("Arial", 10, "bold"), padx=12, pady=4, cursor="hand2",
+            activebackground="#30363d", activeforeground="#a5d6ff",
+        ).pack(side="left", padx=(12, 0))
 
         if too_long:
             def _pause_deploy():
@@ -626,7 +713,8 @@ def _show_deploy_tk_dialog(tk, root, item):
             pause_deploy_btn = tk.Button(
                 preview_row, text="⏸  Pause auto-deny", command=_pause_deploy,
                 bg="#2d3748", fg="#e3b341", relief="flat",
-                font=("Arial", 9), padx=10, cursor="hand2",
+                font=("Arial", 10, "bold"), padx=12, pady=4, cursor="hand2",
+                activebackground="#3d4758", activeforeground="#f6c443",
             )
             pause_deploy_btn.pack(side="right")
 
