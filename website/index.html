@@ -328,6 +328,19 @@
     }
     .warning strong { display: block; margin-bottom: 4px; }
 
+    /* ── Agents table ── */
+    .agents-table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: 12px; }
+    .agents-table th, .agents-table td {
+      text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border);
+    }
+    .agents-table th { color: var(--muted); font-weight: 600; font-size: .76rem; text-transform: uppercase; }
+    .agents-table tr:last-child td { border-bottom: none; }
+    .agents-table td:first-child { font-family: var(--mono); color: #79c0ff; white-space: nowrap; }
+    .agents-table .agent-sha { font-family: var(--mono); color: var(--muted); font-size: .78rem; }
+    .agents-table .agent-origin { font-family: var(--mono); color: #a5d6ff; max-width: 200px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agents-empty { color: var(--muted); font-size: .85rem; font-style: italic; padding: 12px 0; }
+
     /* ── Footer ── */
     footer {
       border-top: 1px solid var(--border); margin-top: 80px;
@@ -354,6 +367,7 @@
     <a href="#api"        data-i18n="navApi">API</a>
     <a href="#demo"       data-i18n="navDemo">Demo</a>
     <a href="#processes"  data-i18n="navProcesses">Processes</a>
+    <a href="#agents"     data-i18n="navAgents">Deployed</a>
   </div>
   <div class="nav-right">
     <div class="lang-toggle">
@@ -771,6 +785,27 @@ if (await w2l.isRunning()) {
     </div>
   </section>
 
+
+  <!-- ── Deployed agents ────────────────────────────────────────────────────── -->
+  <section id="agents">
+    <h2 data-i18n="agentsTitle">Deployed scripts</h2>
+    <p data-i18n-html="agentsIntro">
+      Scripts delivered via <code>POST /deploy</code> are stored in
+      <code>~/.config/web2local/agents/</code> under a filename prefixed with
+      the first 8 chars of their SHA-256. Each entry records which site deployed it.
+      Delete a script here to revoke it permanently.
+    </p>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h3 style="margin:0" data-i18n="agentsTableTitle">Script registry</h3>
+        <button class="btn btn-ghost" style="font-size:.78rem;padding:5px 12px"
+                onclick="refreshAgents()" data-i18n="procRefreshBtn">Refresh</button>
+      </div>
+      <div id="agents-list"><span class="agents-empty" data-i18n="demoLoading">Loading…</span></div>
+    </div>
+  </section>
+
 </main>
 
 <footer data-i18n="footerText">
@@ -912,6 +947,16 @@ if (await w2l.isRunning()) {
       procLogClose: "Close",
       procLogEmpty: "(no output yet)",
 
+      agentsTitle: "Deployed scripts",
+      agentsIntro: "Scripts delivered via <code>POST /deploy</code> are stored in <code>~/.config/web2local/agents/</code> under a filename prefixed with the first 8 chars of their SHA-256. Each entry records which site deployed it. Delete a script here to revoke it permanently.",
+      agentsTableTitle: "Script registry",
+      agentsNone: "No scripts deployed yet.",
+      agentsThFile: "File", agentsThSha: "SHA-256", agentsThOrigin: "Deployed by",
+      agentsThDeployed: "Deployed at",
+      agentsDeleteBtn: "Delete",
+      agentsConfirmDelete: "Delete this script from disk?",
+      navAgents: "Deployed",
+
       footerText: "web2local — runs on your machine, serves your websites.",
     },
 
@@ -1046,6 +1091,16 @@ if (await w2l.isRunning()) {
       procLogClose: "关闭",
       procLogEmpty: "（暂无输出）",
 
+      agentsTitle: "已部署脚本",
+      agentsIntro: "通过 <code>POST /deploy</code> 下发的脚本会存储在 <code>~/.config/web2local/agents/</code> 目录下，文件名以 SHA-256 的前 8 个字符开头。每条记录保存了部署它的来源站点。在此删除脚本即永久撤销授权。",
+      agentsTableTitle: "脚本注册表",
+      agentsNone: "尚未部署任何脚本。",
+      agentsThFile: "文件", agentsThSha: "SHA-256", agentsThOrigin: "部署来源",
+      agentsThDeployed: "部署时间",
+      agentsDeleteBtn: "删除",
+      agentsConfirmDelete: "从磁盘删除此脚本？",
+      navAgents: "已部署",
+
       footerText: "web2local — 在你的电脑上运行，为你的网站服务。",
     },
   };
@@ -1103,6 +1158,7 @@ if (await w2l.isRunning()) {
     refreshConfig();
     refreshLog();
     refreshProcs();
+    refreshAgents();
   }
 
   // ── Run a command ─────────────────────────────────────────────────────────
@@ -1283,7 +1339,10 @@ if (await w2l.isRunning()) {
     }
   }
 
+  let _activeProcLogPid = null;
+
   async function showProcLog(pid) {
+    _activeProcLogPid = pid;
     const viewer = document.getElementById("proc-log-viewer");
     const text   = document.getElementById("proc-log-text");
     viewer.classList.add("visible");
@@ -1298,7 +1357,59 @@ if (await w2l.isRunning()) {
   }
 
   function hideProcLog() {
+    _activeProcLogPid = null;
     document.getElementById("proc-log-viewer").classList.remove("visible");
+  }
+
+  // ── Deployed agents ───────────────────────────────────────────────────────
+  async function refreshAgents() {
+    const el = document.getElementById("agents-list");
+    if (!el) return;
+    let data;
+    try { data = await w2l.listAgents(); }
+    catch {
+      el.innerHTML = `<span class="agents-empty">${t("demoListUnavailable")}</span>`;
+      return;
+    }
+    const agents = data.agents || [];
+    if (agents.length === 0) {
+      el.innerHTML = `<span class="agents-empty">${t("agentsNone")}</span>`;
+      return;
+    }
+    el.innerHTML = `
+      <table class="agents-table">
+        <thead>
+          <tr>
+            <th data-i18n="agentsThFile">${t("agentsThFile")}</th>
+            <th data-i18n="agentsThSha">${t("agentsThSha")}</th>
+            <th data-i18n="agentsThOrigin">${t("agentsThOrigin")}</th>
+            <th data-i18n="agentsThDeployed">${t("agentsThDeployed")}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${agents.map(a => `
+            <tr>
+              <td>${escapeHtml(a.filename)}</td>
+              <td class="agent-sha" title="${escapeHtml(a.sha256)}">${escapeHtml(a.sha256.slice(0, 16))}…</td>
+              <td class="agent-origin" title="${escapeHtml(a.origin || "")}">${escapeHtml(a.origin || "—")}</td>
+              <td>${escapeHtml(a.deployed_at || "")}</td>
+              <td><button class="btn-mini stop"
+                    onclick="deleteAgent('${escapeHtml(a.sha256)}')"
+                    data-i18n="agentsDeleteBtn">${t("agentsDeleteBtn")}</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }
+
+  async function deleteAgent(sha256) {
+    if (!confirm(t("agentsConfirmDelete"))) return;
+    try {
+      await w2l.deleteAgent(sha256);
+      refreshAgents();
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -1322,6 +1433,17 @@ if (await w2l.isRunning()) {
     setLang(saved || (browserZh ? "zh" : "en"));
 
     setInterval(checkDaemon, 10000);
+    setInterval(refreshProcs, 3000);
+    setInterval(refreshAgents, 10000);
+    setInterval(async () => {
+      if (_activeProcLogPid !== null) {
+        const text = document.getElementById("proc-log-text");
+        try {
+          const r = await w2l.tailLog(_activeProcLogPid);
+          text.textContent = r.tail || t("procLogEmpty");
+        } catch { /* daemon offline — keep showing last content */ }
+      }
+    }, 2000);
   });
 </script>
 </body>

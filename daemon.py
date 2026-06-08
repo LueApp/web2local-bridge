@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import datetime
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -56,6 +57,54 @@ def _update_config(new: dict):
     global _config
     with _config_lock:
         _config = new
+
+
+# ── Session trust ─────────────────────────────────────────────────────────────
+# Origins trusted for this daemon session only — cleared on restart, never
+# written to config.json. Treated identically to graylist entries.
+
+_session_trusted: set = set()
+_session_lock = threading.Lock()
+
+
+def _is_session_trusted(origin: str) -> bool:
+    with _session_lock:
+        return origin.rstrip("/") in _session_trusted
+
+
+def _add_session_trust(origin: str):
+    with _session_lock:
+        _session_trusted.add(origin.rstrip("/"))
+
+
+# ── Dialog flood protection ───────────────────────────────────────────────────
+# A hostile page can POST in a tight loop to wear the user down.
+# After _FLOOD_MAX dialogs in _FLOOD_WINDOW seconds the origin is banned for
+# _FLOOD_BAN seconds and all further approval requests auto-deny.
+
+_flood_lock    = threading.Lock()
+_flood_tracker: dict = {}  # origin -> {count, window_start, banned_until}
+_FLOOD_WINDOW  = 60    # seconds per window
+_FLOOD_MAX     = 3     # max dialogs per window before ban
+_FLOOD_BAN     = 300   # ban duration in seconds
+
+
+def _flood_check(origin: str) -> bool:
+    """Return True if origin may show a dialog, False if rate-limited."""
+    now = time.monotonic()
+    with _flood_lock:
+        rec = _flood_tracker.get(origin, {})
+        if rec.get("banned_until", 0) > now:
+            return False
+        if now - rec.get("window_start", 0) > _FLOOD_WINDOW:
+            rec = {"count": 0, "window_start": now, "banned_until": 0.0}
+        rec["count"] = rec.get("count", 0) + 1
+        if rec["count"] > _FLOOD_MAX:
+            rec["banned_until"] = now + _FLOOD_BAN
+            _flood_tracker[origin] = rec
+            return False
+        _flood_tracker[origin] = rec
+        return True
 
 
 # ── Audit log ────────────────────────────────────────────────────────────────
@@ -316,6 +365,65 @@ def _deploy_write(source: str, sha256: str, filename: str) -> tuple:
     return dest, True
 
 
+# ── Agents manifest ───────────────────────────────────────────────────────────
+# Tracks every script deployed via /deploy so the user can see and revoke them.
+
+AGENTS_MANIFEST = os.path.join(CONFIG_DIR, "agents.json")
+
+
+def _agents_load() -> list:
+    if not os.path.exists(AGENTS_MANIFEST):
+        return []
+    try:
+        with open(AGENTS_MANIFEST) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _agents_save(entries: list):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(AGENTS_MANIFEST, "w") as f:
+        json.dump(entries, f, indent=2)
+
+
+def _agents_record(sha256: str, filename: str, dest_path: str, origin: str):
+    entries = [e for e in _agents_load() if e.get("sha256") != sha256]
+    entries.append({
+        "sha256":      sha256,
+        "filename":    filename,
+        "dest_path":   dest_path,
+        "origin":      origin,
+        "deployed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    })
+    _agents_save(entries)
+
+
+def _agents_list_live() -> list:
+    """Return manifest filtered to entries whose files still exist on disk."""
+    entries = _agents_load()
+    live = [e for e in entries if os.path.exists(e.get("dest_path", ""))]
+    if len(live) != len(entries):
+        _agents_save(live)
+    return live
+
+
+def _agents_delete(sha256: str) -> bool:
+    """Delete a deployed script file and its manifest entry. Returns True if found."""
+    entries = _agents_load()
+    entry = next((e for e in entries if e.get("sha256") == sha256), None)
+    if not entry:
+        return False
+    dest = entry.get("dest_path", "")
+    if os.path.exists(dest):
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+    _agents_save([e for e in entries if e.get("sha256") != sha256])
+    return True
+
+
 # ── Graylist confirmation dialog ─────────────────────────────────────────────
 # Main thread runs the GUI loop; HTTP worker threads enqueue requests and
 # block on a threading.Event until the user responds.
@@ -348,6 +456,8 @@ def _run_tk_loop(tk):
                 extra = item[4] if len(item) == 5 else None
                 if extra and extra.get("kind") == "deploy":
                     _show_deploy_tk_dialog(tk, root, item)
+                elif extra and extra.get("kind") == "handshake":
+                    _show_handshake_tk_dialog(tk, root, item)
                 else:
                     _show_tk_dialog(tk, root, item)
             except queue.Empty:
@@ -775,6 +885,77 @@ def _show_deploy_tk_dialog(tk, root, item):
     dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
 
+def _show_handshake_tk_dialog(tk, root, item):
+    """First-contact dialog: a new site wants to connect. User picks trust level."""
+    global _dialog_active
+    origin, _, event, result, _ = item
+    alive = [True]
+
+    dlg = tk.Toplevel(root)
+    dlg.title("web2local — Site Connection Request")
+    dlg.resizable(False, False)
+    dlg.attributes("-topmost", True)
+    dlg.minsize(560, 260)
+
+    hdr = tk.Frame(dlg, bg="#1a2e1a", pady=14)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="New Site Wants to Connect",
+             bg="#1a2e1a", fg="white", font=("Arial", 13, "bold")).pack()
+
+    body = tk.Frame(dlg, padx=22, pady=12)
+    body.pack(fill="both", expand=True)
+
+    tk.Label(body, text="Site:", font=("Arial", 11, "bold"),
+             fg="#e6edf3", anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"),
+             anchor="w").pack(fill="x", pady=(0, 14))
+
+    tk.Label(body,
+             text="This site is not on your whitelist or graylist. How much do you trust it?",
+             fg="#e6edf3", font=("Arial", 10), anchor="w", wraplength=500).pack(fill="x")
+
+    def _choose(level):
+        global _dialog_active
+        if not alive[0]:
+            return
+        alive[0]       = False
+        result[0]      = level
+        _dialog_active = False
+        event.set()
+        dlg.destroy()
+
+    dlg.protocol("WM_DELETE_WINDOW", lambda: _choose(None))
+
+    btn = tk.Frame(dlg, padx=22, pady=14)
+    btn.pack(fill="x")
+
+    tk.Button(btn, text="Block", command=lambda: _choose(None),
+              bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
+              width=8, relief="flat", pady=6).pack(side="left")
+    tk.Button(btn, text="Session only",
+              command=lambda: _choose("session"),
+              bg="#2d5a8e", fg="white", font=("Arial", 10, "bold"),
+              relief="flat", padx=14, pady=6).pack(side="left", padx=(8, 0))
+    tk.Button(btn, text="Always graylist",
+              command=lambda: _choose("graylist"),
+              bg="#7a6000", fg="white", font=("Arial", 10, "bold"),
+              relief="flat", padx=14, pady=6).pack(side="left", padx=(8, 0))
+    tk.Button(btn, text="Always whitelist",
+              command=lambda: _choose("whitelist"),
+              bg="#1a6b3a", fg="white", font=("Arial", 10, "bold"),
+              relief="flat", padx=14, pady=6).pack(side="right")
+
+    tk.Label(body,
+             text="Session: trust until the daemon restarts. Graylist: prompt every command. Whitelist: run without prompts.",
+             fg="#666", font=("Arial", 8, "italic"), anchor="w",
+             wraplength=500).pack(fill="x", pady=(10, 0))
+
+    dlg.update_idletasks()
+    sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+    w,  h  = dlg.winfo_width(),       dlg.winfo_height()
+    dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+
 def _run_terminal_loop():
     """Fallback when tkinter is unavailable."""
     while True:
@@ -784,7 +965,29 @@ def _run_terminal_loop():
             if len(item) == 5:
                 origin, cmd_list, event, result, meta = item
                 kind = meta.get("kind", "deploy")
-                if kind == "deploy":
+                if kind == "handshake":
+                    print(f"\n{sep}")
+                    print("[web2local] SITE CONNECTION REQUEST")
+                    print(sep)
+                    print(f"  Site: {origin}")
+                    print("  Options:")
+                    print("    (1) Block")
+                    print("    (2) Session graylist (trust until daemon restarts)")
+                    print("    (3) Always graylist  (prompt before each command)")
+                    print("    (4) Always whitelist (run without prompts)")
+                    print(sep)
+                    try:
+                        ans = input("  Choice (1-4): ").strip()
+                        result[0] = {
+                            "1": None, "2": "session",
+                            "3": "graylist", "4": "whitelist",
+                        }.get(ans)
+                    except (EOFError, KeyboardInterrupt):
+                        result[0] = None
+                        print("\n[blocked]")
+                    event.set()
+                    continue
+                elif kind == "deploy":
                     print(f"\n{sep}")
                     print("[web2local] SCRIPT DEPLOY & RUN APPROVAL REQUIRED")
                     print(sep)
@@ -842,6 +1045,9 @@ def _request_approval(origin: str, cmd_list: list,
                        preview: dict | None = None) -> bool:
     """Queue a command approval dialog and block until the user responds.
     Pass preview=dict (from _read_script_preview) to show the script source."""
+    if not _flood_check(origin):
+        _audit("FLOOD_BLOCKED", origin, cmd_list, "flood_rate_limit")
+        return False
     event  = threading.Event()
     result = [False]
     if preview:
@@ -858,6 +1064,9 @@ def _request_deploy_approval(origin: str, filename: str, sha256: str,
     """Queue a deploy approval dialog and block until the user responds.
     Always shown — even for whitelist origins — because writing executable code
     to disk is categorically more powerful than running a known command."""
+    if not _flood_check(origin):
+        _audit("FLOOD_BLOCKED", origin, [filename], "flood_rate_limit")
+        return False
     event  = threading.Event()
     result = [False]
     _dialog_queue.put((origin, cmd_list, event, result, {
@@ -867,6 +1076,16 @@ def _request_deploy_approval(origin: str, filename: str, sha256: str,
         "dest_path": dest_path,
         "source":    source,
     }))
+    event.wait(timeout=135)
+    return result[0]
+
+
+def _request_handshake(origin: str):
+    """Queue a handshake dialog and block until the user responds.
+    Returns trust level: 'session' | 'graylist' | 'whitelist' | None (blocked)."""
+    event  = threading.Event()
+    result = [None]
+    _dialog_queue.put((origin, None, event, result, {"kind": "handshake"}))
     event.wait(timeout=135)
     return result[0]
 
@@ -912,6 +1131,8 @@ class Handler(BaseHTTPRequestHandler):
         if norm in [o.rstrip("/") for o in cfg["whitelist"]]:
             return "whitelist"
         if norm in [o.rstrip("/") for o in cfg["graylist"]]:
+            return "graylist"
+        if _is_session_trusted(origin):
             return "graylist"
         return None
 
@@ -990,6 +1211,12 @@ class Handler(BaseHTTPRequestHandler):
                        origin)
             return
 
+        if path == "/agents":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}); return
+            _send_json(self, 200, {"agents": _agents_list_live()}, origin)
+            return
+
         self.send_response(404); self.end_headers()
 
     # ── POST ──
@@ -1017,8 +1244,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/config/whitelist", "/config/graylist"):
             url = data.get("origin", "").rstrip("/")
-            if not url:
-                _send_json(self, 400, {"error": "missing origin"}, origin); return
+            if not url or url == "null":
+                _send_json(self, 400, {"error": "missing or invalid origin"}, origin); return
             cfg  = _get_config()
             list_key  = "whitelist" if path == "/config/whitelist" else "graylist"
             other_key = "graylist"  if list_key == "whitelist"     else "whitelist"
@@ -1038,6 +1265,55 @@ class Handler(BaseHTTPRequestHandler):
             _update_config(cfg)
             _save_config(cfg)
             _send_json(self, 200, {"status": "removed"}, origin)
+            return
+
+        # ── /handshake — first-contact trust request from an unknown site ──
+
+        if path == "/handshake":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}, origin); return
+            req_origin = data.get("origin", origin).rstrip("/")
+            if not req_origin or req_origin == "null":
+                _send_json(self, 400, {"error": "invalid origin"}, origin); return
+            existing = self._classify(req_origin)
+            if existing:
+                _send_json(self, 200,
+                           {"status": "already_trusted", "level": existing}, origin)
+                return
+            level = _request_handshake(req_origin)
+            if level is None:
+                _send_json(self, 403, {"error": "connection blocked by user"}, origin)
+                _audit("BLOCKED", req_origin, [], "handshake_blocked")
+                return
+            if level == "session":
+                _add_session_trust(req_origin)
+                _send_json(self, 200, {"status": "trusted", "level": "session"}, origin)
+                _audit("ALLOWED", req_origin, [], "handshake_session")
+            elif level in ("graylist", "whitelist"):
+                cfg = _get_config()
+                other = "whitelist" if level == "graylist" else "graylist"
+                cfg[other] = [o for o in cfg[other] if o.rstrip("/") != req_origin]
+                if req_origin not in [o.rstrip("/") for o in cfg[level]]:
+                    cfg[level].append(req_origin)
+                _update_config(cfg)
+                _save_config(cfg)
+                _send_json(self, 200, {"status": "trusted", "level": level}, origin)
+                _audit("ALLOWED", req_origin, [], f"handshake_{level}")
+            return
+
+        # ── /agents/delete — remove a deployed script ──
+
+        if path == "/agents/delete":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}, origin); return
+            sha256 = data.get("sha256", "")
+            if not sha256:
+                _send_json(self, 400, {"error": "missing sha256"}, origin); return
+            found = _agents_delete(sha256)
+            if not found:
+                _send_json(self, 404, {"error": "agent not found"}, origin); return
+            _audit("DELETE", origin, [sha256[:8]], "agent_deleted")
+            _send_json(self, 200, {"status": "deleted"}, origin)
             return
 
         # ── /spawn — start a long-running process, return immediately ──
@@ -1181,6 +1457,7 @@ class Handler(BaseHTTPRequestHandler):
                 _audit("WRITE", origin, [dest_path, sha256[:8]], "file_written")
             else:
                 _audit("WRITE", origin, [dest_path, sha256[:8]], "file_cached")
+            _agents_record(sha256, filename, dest_path, origin)
 
             # Spawn.
             try:

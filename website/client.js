@@ -192,6 +192,45 @@ class Web2Local {
     return data;
   }
 
+  /**
+   * Ask the daemon to trust this page's origin.
+   * Shows a native dialog on first contact; returns immediately if already trusted.
+   *
+   * @param {object} [opts]
+   * @param {string} [opts.origin] - Override the origin (default: window.location.origin)
+   * @returns {Promise<{status:string, level:string}>}
+   * @throws if blocked by user or daemon unreachable
+   */
+  async requestAccess({ origin } = {}) {
+    const r = await fetch(`${this.base}/handshake`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ origin: origin || window.location.origin }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  /**
+   * List scripts deployed via /deploy that are still on disk.
+   * @returns {Promise<{agents: Array<{sha256,filename,dest_path,origin,deployed_at}>}>}
+   */
+  async listAgents() {
+    const r = await fetch(`${this.base}/agents`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  /**
+   * Delete a deployed script by its SHA-256 hash.
+   * @param {string} sha256 - Full 64-char hex digest
+   * @returns {Promise<{status:string}>}
+   */
+  async deleteAgent(sha256) {
+    return this._postConfig("/agents/delete", { sha256 });
+  }
+
   async _postConfig(path, body) {
     const r = await fetch(`${this.base}${path}`, {
       method:  "POST",
