@@ -207,25 +207,52 @@
       background: transparent; border: 1px solid var(--border); color: var(--text);
     }
 
-    /* Process table */
-    .proc-table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: 10px; }
-    .proc-table th, .proc-table td {
-      padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border);
+    /* Process cards */
+    .proc-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+    .proc-card {
+      background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px 16px; transition: border-color .15s;
     }
-    .proc-table th { color: var(--muted); font-size: .72rem; text-transform: uppercase; font-weight: 600; }
-    .proc-table td.mono { font-family: var(--mono); word-break: break-all; }
-    .proc-table td.pid { color: #79c0ff; white-space: nowrap; }
-    .proc-table td.actions { white-space: nowrap; text-align: right; width: 1%; }
-    .proc-table td.nowrap { white-space: nowrap; }
-    .proc-table tr:last-child td { border-bottom: none; }
+    .proc-card:hover { border-color: #30425a; }
+    .proc-card-head {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .proc-pid {
+      font-family: var(--mono); font-size: .85rem; color: #79c0ff;
+      background: rgba(121, 192, 255, .08); padding: 3px 9px; border-radius: 4px;
+      font-weight: 600; white-space: nowrap;
+    }
+    .proc-meta {
+      display: flex; gap: 14px; flex-wrap: wrap; font-size: .76rem;
+      color: var(--muted); flex: 1;
+    }
+    .proc-meta-item { display: inline-flex; align-items: center; gap: 5px; }
+    .proc-meta-item .label { color: var(--muted); opacity: .7; }
+    .proc-meta-item .value { color: var(--text); }
+    .proc-meta-item .origin {
+      font-family: var(--mono); color: #a5d6ff; max-width: 240px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .proc-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .proc-cmd {
+      font-family: var(--mono); font-size: .78rem; color: var(--text);
+      background: #010409; border: 1px solid var(--border); border-radius: 5px;
+      padding: 10px 12px; line-height: 1.55;
+      overflow-x: auto; white-space: pre; max-width: 100%;
+    }
+    .proc-cmd::-webkit-scrollbar { height: 6px; }
+    .proc-cmd::-webkit-scrollbar-track { background: transparent; }
+    .proc-cmd::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .btn-mini {
-      padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer;
-      font-size: .75rem; font-weight: 600; margin-right: 4px;
-      white-space: nowrap;
+      padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer;
+      font-size: .75rem; font-weight: 600; white-space: nowrap;
+      transition: opacity .15s, border-color .15s;
     }
+    .btn-mini:hover { opacity: .85; }
     .btn-mini.stop { background: var(--red);    color: #fff; }
     .btn-mini.logs { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-    .btn-mini.logs:hover { border-color: var(--accent); }
+    .btn-mini.logs:hover { border-color: var(--accent); opacity: 1; }
 
     #proc-log-viewer {
       background: #010409; border: 1px solid var(--border); border-radius: 8px;
@@ -1218,30 +1245,29 @@ if (await w2l.isRunning()) {
       return;
     }
     el.innerHTML = `
-      <table class="proc-table">
-        <thead>
-          <tr>
-            <th>${t("procThPid")}</th>
-            <th>${t("procThCommand")}</th>
-            <th>${t("procThStarted")}</th>
-            <th>${t("procThOrigin")}</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${procs.map(p => `
-            <tr>
-              <td class="mono pid">${p.pid}</td>
-              <td class="mono">${escapeHtml(formatArgv(p.command))}</td>
-              <td class="nowrap">${p.started_at}</td>
-              <td class="mono" style="color:var(--muted)">${escapeHtml(p.origin || "")}</td>
-              <td class="actions">
+      <div class="proc-list">
+        ${procs.map(p => `
+          <div class="proc-card">
+            <div class="proc-card-head">
+              <span class="proc-pid" title="${t("procThPid")}">PID ${p.pid}</span>
+              <div class="proc-meta">
+                <span class="proc-meta-item">
+                  <span class="label">${t("procThStarted")}:</span>
+                  <span class="value">${escapeHtml(p.started_at)}</span>
+                </span>
+                <span class="proc-meta-item">
+                  <span class="label">${t("procThOrigin")}:</span>
+                  <span class="origin" title="${escapeHtml(p.origin || "")}">${escapeHtml(p.origin || "—")}</span>
+                </span>
+              </div>
+              <div class="proc-actions">
                 <button class="btn-mini logs" onclick="showProcLog(${p.pid})">${t("procBtnLogs")}</button>
                 <button class="btn-mini stop" onclick="stopProc(${p.pid})">${t("procBtnStop")}</button>
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>`;
+              </div>
+            </div>
+            <div class="proc-cmd">${escapeHtml(formatArgv(p.command))}</div>
+          </div>`).join("")}
+      </div>`;
   }
 
   async function stopProc(pid) {
