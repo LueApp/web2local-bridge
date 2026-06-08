@@ -491,13 +491,13 @@ def _show_tk_dialog(tk, root, item):
     tk.Label(hdr, text="⚠  Command Approval Required",
              bg="#1a1a2e", fg="white", font=("Arial", 13, "bold")).pack()
 
-    body = tk.Frame(dlg, padx=22, pady=12)
+    body = tk.Frame(dlg, bg="#0d1117", padx=22, pady=12)
     body.pack(fill="both", expand=True)
 
-    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
-    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), anchor="w").pack(fill="x", pady=(0, 12))
+    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), bg=body["bg"], anchor="w").pack(fill="x", pady=(0, 12))
 
-    tk.Label(body, text="Command to execute:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
+    tk.Label(body, text="Command to execute:", font=("Arial", 11, "bold"), fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
 
     frm = tk.Frame(body, relief="sunken", bd=1)
     frm.pack(fill="x", pady=(4, 0))
@@ -519,7 +519,7 @@ def _show_tk_dialog(tk, root, item):
 
     tk.Label(body,
              text="Read the full command carefully. Scroll right if it is long.",
-             fg="#cc0000", font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
+             fg="#cc0000", bg=body["bg"], font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
 
     # ── Script preview (optional) ──────────────────────────────────────
     if preview:
@@ -528,7 +528,7 @@ def _show_tk_dialog(tk, root, item):
         toggle_row = tk.Frame(body, bg=body["bg"])
         toggle_row.pack(fill="x")
 
-        pf       = tk.Frame(body)
+        pf       = tk.Frame(body, bg=body["bg"])
         pf_shown = [False]
 
         # Path label (above the source box) — shows what file is being previewed
@@ -614,7 +614,7 @@ def _show_tk_dialog(tk, root, item):
     # ── Timer ─────────────────────────────────────────────────────────
     remaining = [120]
     timer_var = tk.StringVar(value="Auto-deny in 120 s")
-    tk.Label(body, textvariable=timer_var, fg="#888",
+    tk.Label(body, textvariable=timer_var, fg="#888", bg=body["bg"],
              font=("Arial", 8), anchor="w").pack(fill="x", pady=(8, 0))
 
     def _tick():
@@ -651,7 +651,7 @@ def _show_tk_dialog(tk, root, item):
 
     dlg.protocol("WM_DELETE_WINDOW", _deny)
 
-    btn = tk.Frame(dlg, padx=22, pady=14)
+    btn = tk.Frame(dlg, bg="#0d1117", padx=22, pady=14)
     btn.pack(fill="x")
     tk.Button(btn, text="Deny", command=_deny,
               bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
@@ -689,12 +689,12 @@ def _show_deploy_tk_dialog(tk, root, item):
     tk.Label(hdr, text="⚠  Script Deploy & Run — Approval Required",
              bg="#2d1a4a", fg="white", font=("Arial", 13, "bold")).pack()
 
-    body = tk.Frame(dlg, padx=22, pady=12)
+    body = tk.Frame(dlg, bg="#0d1117", padx=22, pady=12)
     body.pack(fill="both", expand=True)
 
     # Requesting site
-    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", anchor="w").pack(fill="x")
-    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), anchor="w").pack(fill="x", pady=(0, 10))
+    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"), fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"), bg=body["bg"], anchor="w").pack(fill="x", pady=(0, 10))
 
     # File info grid
     info = tk.Frame(body, bg=body["bg"])
@@ -725,7 +725,7 @@ def _show_deploy_tk_dialog(tk, root, item):
 
     # Command box
     tk.Label(body, text="Command to run:", font=("Arial", 11, "bold"),
-             fg="#e6edf3", anchor="w").pack(fill="x")
+             fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
     frm = tk.Frame(body, relief="solid", bd=1, bg="#30363d")
     frm.pack(fill="x", pady=(4, 0))
 
@@ -754,7 +754,7 @@ def _show_deploy_tk_dialog(tk, root, item):
         preview_row = tk.Frame(body, bg=body["bg"])
         preview_row.pack(fill="x")
 
-        pf       = tk.Frame(body)
+        pf       = tk.Frame(body, bg=body["bg"])
         pf_shown = [True]   # expanded by default for deploy
 
         src_box = tk.Frame(pf, relief="solid", bd=1, bg="#30363d")
@@ -830,11 +830,11 @@ def _show_deploy_tk_dialog(tk, root, item):
 
     tk.Label(body,
              text="Verify the SHA-256 above against what the website published before approving.",
-             fg="#cc0000", font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
+             fg="#cc0000", bg=body["bg"], font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
 
     remaining = [120]
     timer_var = tk.StringVar(value="Auto-deny in 120 s")
-    tk.Label(body, textvariable=timer_var, fg="#888", font=("Arial", 8), anchor="w").pack(fill="x")
+    tk.Label(body, textvariable=timer_var, fg="#888", bg=body["bg"], font=("Arial", 8), anchor="w").pack(fill="x")
 
     def _tick():
         if not alive[0] or paused[0]:
@@ -870,7 +870,7 @@ def _show_deploy_tk_dialog(tk, root, item):
 
     dlg.protocol("WM_DELETE_WINDOW", _deny)
 
-    btn = tk.Frame(dlg, padx=22, pady=14)
+    btn = tk.Frame(dlg, bg="#0d1117", padx=22, pady=14)
     btn.pack(fill="x")
     tk.Button(btn, text="Deny", command=_deny,
               bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
@@ -902,17 +902,17 @@ def _show_handshake_tk_dialog(tk, root, item):
     tk.Label(hdr, text="New Site Wants to Connect",
              bg="#1a2e1a", fg="white", font=("Arial", 13, "bold")).pack()
 
-    body = tk.Frame(dlg, padx=22, pady=12)
+    body = tk.Frame(dlg, bg="#0d1117", padx=22, pady=12)
     body.pack(fill="both", expand=True)
 
     tk.Label(body, text="Site:", font=("Arial", 11, "bold"),
-             fg="#e6edf3", anchor="w").pack(fill="x")
+             fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
     tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"),
-             anchor="w").pack(fill="x", pady=(0, 14))
+             bg=body["bg"], anchor="w").pack(fill="x", pady=(0, 14))
 
     tk.Label(body,
              text="This site is not on your whitelist or graylist. How much do you trust it?",
-             fg="#e6edf3", font=("Arial", 10), anchor="w", wraplength=500).pack(fill="x")
+             fg="#e6edf3", bg=body["bg"], font=("Arial", 10), anchor="w", wraplength=500).pack(fill="x")
 
     def _choose(level):
         global _dialog_active
@@ -926,7 +926,7 @@ def _show_handshake_tk_dialog(tk, root, item):
 
     dlg.protocol("WM_DELETE_WINDOW", lambda: _choose(None))
 
-    btn = tk.Frame(dlg, padx=22, pady=14)
+    btn = tk.Frame(dlg, bg="#0d1117", padx=22, pady=14)
     btn.pack(fill="x")
 
     tk.Button(btn, text="Block", command=lambda: _choose(None),
@@ -947,7 +947,7 @@ def _show_handshake_tk_dialog(tk, root, item):
 
     tk.Label(body,
              text="Session: trust until the daemon restarts. Graylist: prompt every command. Whitelist: run without prompts.",
-             fg="#666", font=("Arial", 8, "italic"), anchor="w",
+             fg="#666", bg=body["bg"], font=("Arial", 8, "italic"), anchor="w",
              wraplength=500).pack(fill="x", pady=(10, 0))
 
     dlg.update_idletasks()
