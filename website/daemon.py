@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """web2local daemon — bridges websites to local command execution safely."""
 
+import hashlib
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -16,8 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 CONFIG_DIR    = os.path.expanduser("~/.config/web2local")
 CONFIG_PATH   = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH      = os.path.join(CONFIG_DIR, "audit.log")
-PROC_DIR      = os.path.join(CONFIG_DIR, "processes")  # per-PID log files
-PROC_INDEX    = os.path.join(CONFIG_DIR, "processes.json")  # PID → metadata
+PROC_DIR      = os.path.join(CONFIG_DIR, "processes")   # per-PID log files
+PROC_INDEX    = os.path.join(CONFIG_DIR, "processes.json")
+AGENTS_DIR    = os.path.join(CONFIG_DIR, "agents")      # deployed scripts
 
 DEFAULT_CONFIG = {"port": 7878, "whitelist": [], "graylist": []}
 
@@ -229,6 +232,34 @@ def _proc_tail(log_path: str, lines: int = 200) -> str:
     return "\n".join(data.splitlines()[-lines:])
 
 
+# ── Agent delivery ───────────────────────────────────────────────────────────
+
+def _deploy_resolve(filename: str, sha256: str) -> str:
+    """Return the canonical on-disk path for a deployed script."""
+    safe = re.sub(r"[^\w\-.]", "_", os.path.basename(filename)) or "agent.py"
+    return os.path.join(AGENTS_DIR, f"{sha256[:8]}-{safe}")
+
+
+def _deploy_write(source: str, sha256: str, filename: str) -> tuple:
+    """Verify SHA-256, write file if needed, return (dest_path, was_written)."""
+    actual = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if actual != sha256.lower():
+        raise ValueError(f"SHA-256 mismatch: provided {sha256[:8]}…, content hashes to {actual[:8]}…")
+
+    dest = _deploy_resolve(filename, sha256)
+    os.makedirs(AGENTS_DIR, exist_ok=True)
+
+    # Idempotent: skip write if the exact bytes already exist.
+    if os.path.exists(dest):
+        with open(dest, "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() == sha256.lower():
+                return dest, False
+
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(source)
+    return dest, True
+
+
 # ── Graylist confirmation dialog ─────────────────────────────────────────────
 # Main thread runs the GUI loop; HTTP worker threads enqueue requests and
 # block on a threading.Event until the user responds.
@@ -258,7 +289,10 @@ def _run_tk_loop(tk):
             try:
                 item = _dialog_queue.get_nowait()
                 _dialog_active = True
-                _show_tk_dialog(tk, root, item)
+                if len(item) == 5:
+                    _show_deploy_tk_dialog(tk, root, item)
+                else:
+                    _show_tk_dialog(tk, root, item)
             except queue.Empty:
                 pass
         root.after(100, _check)
@@ -371,20 +405,161 @@ def _show_tk_dialog(tk, root, item):
     dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
 
+def _show_deploy_tk_dialog(tk, root, item):
+    """Deploy-specific approval dialog: shows filename, full SHA-256, destination, and command."""
+    global _dialog_active
+    origin, cmd_list, event, result, meta = item
+    filename  = meta["filename"]
+    sha256    = meta["sha256"]
+    dest_path = meta["dest_path"]
+    alive     = [True]
+
+    dlg = tk.Toplevel(root)
+    dlg.title("web2local — Script Deploy & Run Approval")
+    dlg.resizable(True, True)
+    dlg.attributes("-topmost", True)
+    dlg.minsize(620, 480)
+
+    # Header
+    hdr = tk.Frame(dlg, bg="#2d1a4a", pady=14)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="⚠  Script Deploy & Run — Approval Required",
+             bg="#2d1a4a", fg="white", font=("Arial", 13, "bold")).pack()
+
+    body = tk.Frame(dlg, padx=22, pady=12)
+    body.pack(fill="both", expand=True)
+
+    # Requesting site
+    tk.Label(body, text="Requesting website:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#d4860a", font=("Courier", 10), anchor="w").pack(fill="x", pady=(0, 10))
+
+    # File info grid
+    info = tk.Frame(body, bg=body["bg"])
+    info.pack(fill="x", pady=(0, 10))
+
+    def _row(label, value, selectable=False):
+        tk.Label(info, text=label, font=("Arial", 9, "bold"), anchor="w",
+                 bg=body["bg"], width=14, justify="left").grid(
+            row=_row.n, column=0, sticky="nw", pady=2)
+        if selectable:
+            e = tk.Entry(info, font=("Courier", 9), bg="#1e1e1e", fg="#a5d6ff",
+                         relief="flat", readonlybackground="#1e1e1e", width=60)
+            e.insert(0, value)
+            e.config(state="readonly")
+            e.grid(row=_row.n, column=1, sticky="ew", padx=(6, 0), pady=2)
+        else:
+            tk.Label(info, text=value, font=("Courier", 9), anchor="w",
+                     fg="#c9d1d9", bg=body["bg"], wraplength=430, justify="left").grid(
+                row=_row.n, column=1, sticky="w", padx=(6, 0), pady=2)
+        _row.n += 1
+
+    _row.n = 0
+    info.columnconfigure(1, weight=1)
+    _row("File:", filename)
+    _row("SHA-256:", sha256, selectable=True)
+    _row("Destination:", dest_path.replace(os.path.expanduser("~"), "~"))
+
+    # Command box
+    tk.Label(body, text="Command to run:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
+    frm = tk.Frame(body, relief="sunken", bd=1)
+    frm.pack(fill="both", expand=True, pady=(4, 0))
+
+    txt  = tk.Text(frm, font=("Courier", 10), height=4, wrap="none",
+                   bg="#1e1e1e", fg="#d4d4d4")
+    sb_x = tk.Scrollbar(frm, orient="horizontal", command=txt.xview)
+    txt.configure(xscrollcommand=sb_x.set)
+    display = " ".join(
+        f'"{a}"' if (" " in a or not a) else a for a in cmd_list
+    )
+    txt.insert("end", display)
+    txt.config(state="disabled")
+    sb_x.pack(side="bottom", fill="x")
+    txt.pack(fill="both", expand=True)
+
+    tk.Label(body,
+             text="Verify the SHA-256 above against what the website published before approving.",
+             fg="#cc0000", font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
+
+    remaining = [120]
+    timer_var = tk.StringVar(value="Auto-deny in 120 s")
+    tk.Label(body, textvariable=timer_var, fg="#888", font=("Arial", 8), anchor="w").pack(fill="x")
+
+    def _tick():
+        if not alive[0]:
+            return
+        remaining[0] -= 1
+        if remaining[0] <= 0:
+            _deny()
+            return
+        timer_var.set(f"Auto-deny in {remaining[0]} s")
+        dlg.after(1000, _tick)
+
+    dlg.after(1000, _tick)
+
+    def _approve():
+        global _dialog_active
+        if not alive[0]:
+            return
+        alive[0]       = False
+        result[0]      = True
+        _dialog_active = False
+        event.set()
+        dlg.destroy()
+
+    def _deny():
+        global _dialog_active
+        if not alive[0]:
+            return
+        alive[0]       = False
+        result[0]      = False
+        _dialog_active = False
+        event.set()
+        dlg.destroy()
+
+    dlg.protocol("WM_DELETE_WINDOW", _deny)
+
+    btn = tk.Frame(dlg, padx=22, pady=14)
+    btn.pack(fill="x")
+    tk.Button(btn, text="Deny", command=_deny,
+              bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
+              width=12, relief="flat", pady=6).pack(side="left")
+    tk.Button(btn, text="Allow — Write & Run", command=_approve,
+              bg="#6f42c1", fg="white", font=("Arial", 10, "bold"),
+              width=20, relief="flat", pady=6).pack(side="right")
+
+    dlg.update_idletasks()
+    sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+    w,  h  = dlg.winfo_width(),       dlg.winfo_height()
+    dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+
 def _run_terminal_loop():
     """Fallback when tkinter is unavailable."""
     while True:
         try:
-            item           = _dialog_queue.get(timeout=1)
-            origin, cmd_list, event, result = item
-            sep            = "=" * 60
-            display        = " ".join(cmd_list)
-            print(f"\n{sep}")
-            print("[web2local] COMMAND APPROVAL REQUIRED")
-            print(sep)
-            print(f"  Site   : {origin}")
-            print(f"  Command: {display}")
-            print(sep)
+            item = _dialog_queue.get(timeout=1)
+            sep  = "=" * 60
+            if len(item) == 5:
+                origin, cmd_list, event, result, meta = item
+                print(f"\n{sep}")
+                print("[web2local] SCRIPT DEPLOY & RUN APPROVAL REQUIRED")
+                print(sep)
+                print(f"  Site        : {origin}")
+                print(f"  File        : {meta['filename']}")
+                print(f"  SHA-256     : {meta['sha256']}")
+                print(f"  Destination : {meta['dest_path']}")
+                print(f"  Command     : {' '.join(cmd_list)}")
+                print(f"{sep}")
+                print("  Verify the SHA-256 before answering.")
+            else:
+                origin, cmd_list, event, result = item
+                display = " ".join(cmd_list)
+                print(f"\n{sep}")
+                print("[web2local] COMMAND APPROVAL REQUIRED")
+                print(sep)
+                print(f"  Site   : {origin}")
+                print(f"  Command: {display}")
+                print(sep)
             try:
                 ans       = input("  Allow? (y/N): ").strip().lower()
                 result[0] = (ans == "y")
@@ -397,11 +572,27 @@ def _run_terminal_loop():
 
 
 def _request_approval(origin: str, cmd_list: list) -> bool:
-    """Queue a graylist dialog and block until the user responds."""
+    """Queue a command approval dialog and block until the user responds."""
     event  = threading.Event()
     result = [False]
     _dialog_queue.put((origin, cmd_list, event, result))
-    event.wait(timeout=135)  # 15s longer than auto-deny
+    event.wait(timeout=135)
+    return result[0]
+
+
+def _request_deploy_approval(origin: str, filename: str, sha256: str,
+                              dest_path: str, cmd_list: list) -> bool:
+    """Queue a deploy approval dialog (5-tuple) and block until the user responds.
+    Always shown — even for whitelist origins — because writing executable code
+    to disk is categorically more powerful than running a known command."""
+    event  = threading.Event()
+    result = [False]
+    _dialog_queue.put((origin, cmd_list, event, result, {
+        "filename":  filename,
+        "sha256":    sha256,
+        "dest_path": dest_path,
+    }))
+    event.wait(timeout=135)
     return result[0]
 
 
@@ -461,9 +652,9 @@ class Handler(BaseHTTPRequestHandler):
         path   = self.path.split("?")[0]
         if not self._host_ok():
             self.send_response(403); self.end_headers(); return
-        # /run requires the origin to already be in a list.
+        # Execution endpoints require origin to be in a list.
         # Config endpoints have no such restriction — that's how you add yourself.
-        if path == "/run" and not self._classify(origin):
+        if path in ("/run", "/spawn", "/stop", "/deploy") and not self._classify(origin):
             self.send_response(403); self.end_headers(); return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin",          origin)
@@ -634,6 +825,103 @@ class Handler(BaseHTTPRequestHandler):
             result = _proc_stop(pid)
             _audit("STOP", origin, [str(pid)], result.get("status", "?"))
             _send_json(self, 200, result, origin)
+            return
+
+        # ── /deploy — verify SHA-256, write file, spawn ──────────────────────
+        # Always shows the approval dialog regardless of whitelist/graylist,
+        # because writing executable code to disk is more powerful than running
+        # a known command. The dialog shows filename, full SHA-256, destination,
+        # and the exact command so the user can verify before approving.
+
+        if path == "/deploy":
+            classification = self._classify(origin)
+            if not classification:
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                _audit("BLOCKED", origin or "unknown", [], "not_in_list")
+                return
+
+            source   = data.get("source",   "")
+            sha256   = data.get("sha256",   "")
+            filename = data.get("filename", "agent.py")
+            command  = data.get("command",  "")
+            args     = data.get("args",     [])
+
+            if not isinstance(source, str) or not source:
+                _send_json(self, 400, {"error": "source must be a non-empty string"}, origin); return
+            if len(source.encode("utf-8")) > 1 * 1024 * 1024:
+                _send_json(self, 400, {"error": "source exceeds 1 MB limit"}, origin); return
+            if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+                _send_json(self, 400, {"error": "sha256 must be a 64-char hex string"}, origin); return
+            if not command or not isinstance(command, str):
+                _send_json(self, 400, {"error": "command must be a non-empty string"}, origin); return
+            if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+                _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
+
+            # Verify hash before asking user — no point showing the dialog for
+            # a tampered payload.
+            actual_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            if actual_hash != sha256.lower():
+                _send_json(self, 400, {
+                    "error": f"SHA-256 mismatch: provided {sha256[:8]}…, content is {actual_hash[:8]}…"
+                }, origin)
+                _audit("BLOCKED", origin, [filename], "sha256_mismatch")
+                return
+
+            dest_path = _deploy_resolve(filename, sha256)
+            cmd_list  = [command, dest_path] + args
+
+            # Check if already running — re-runnable without a second dialog.
+            live     = _proc_list_live()
+            existing = next(
+                (e for e in live
+                 if len(e["command"]) >= 2 and e["command"][1] == dest_path),
+                None
+            )
+            if existing:
+                _send_json(self, 200, {
+                    "pid":            existing["pid"],
+                    "path":           dest_path,
+                    "started_at":     existing["started_at"],
+                    "log_path":       existing["log_path"],
+                    "already_running": True,
+                }, origin)
+                _audit("SKIP", origin, cmd_list, f"already_running_pid:{existing['pid']}")
+                return
+
+            # Always show the deploy dialog — whitelist or graylist.
+            approved = _request_deploy_approval(origin, filename, sha256, dest_path, cmd_list)
+            if not approved:
+                _send_json(self, 403, {"error": "deploy denied by user"}, origin)
+                _audit("DENIED", origin, [filename, sha256[:8]], "deploy_denied_by_user")
+                return
+
+            # Write file (idempotent if same hash already on disk).
+            try:
+                dest_path, was_written = _deploy_write(source, sha256, filename)
+            except ValueError as e:
+                _send_json(self, 400, {"error": str(e)}, origin); return
+
+            if was_written:
+                _audit("WRITE", origin, [dest_path, sha256[:8]], "file_written")
+            else:
+                _audit("WRITE", origin, [dest_path, sha256[:8]], "file_cached")
+
+            # Spawn.
+            try:
+                entry = _proc_spawn(cmd_list, origin)
+                _audit("APPROVED", origin, cmd_list, "deploy_spawned")
+                _send_json(self, 200, {
+                    "pid":        entry["pid"],
+                    "path":       dest_path,
+                    "started_at": entry["started_at"],
+                    "log_path":   entry["log_path"],
+                }, origin)
+            except FileNotFoundError:
+                _send_json(self, 400, {"error": f"command not found: {command}"}, origin)
+                _audit("ERROR", origin, cmd_list, "deploy_command_not_found")
+            except OSError as e:
+                _send_json(self, 500, {"error": f"spawn failed: {e}"}, origin)
+                _audit("ERROR", origin, cmd_list, f"deploy_oserror:{e}")
             return
 
         # ── /run ──

@@ -161,6 +161,37 @@ class Web2Local {
     return r.json();
   }
 
+  /**
+   * Fetch a script from the page's own origin, verify its SHA-256, hand
+   * the source to the daemon, and spawn it — all in one round-trip.
+   *
+   * The daemon will ALWAYS show a native approval dialog before writing or
+   * running anything, regardless of whitelist status.
+   *
+   * @param {object} opts
+   * @param {string}   opts.source   - Full source of the script (UTF-8 string).
+   * @param {string}   opts.sha256   - Expected SHA-256 hex digest (64 chars).
+   *                                   Must match sha256(source); daemon rejects
+   *                                   on mismatch before showing any dialog.
+   * @param {string}   [opts.filename="agent.py"] - Suggested filename on disk.
+   * @param {string}   opts.command  - Interpreter (e.g. "python3").
+   * @param {string[]} [opts.args=[]] - Arguments passed after the script path.
+   *
+   * @returns {Promise<{pid:number, path:string, started_at:string,
+   *                    log_path:string, already_running?:boolean}>}
+   * @throws  if denied by user, sha256 mismatches, or daemon unreachable.
+   */
+  async deploy({ source, sha256, filename = "agent.py", command, args = [] }) {
+    const r = await fetch(`${this.base}/deploy`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ source, sha256, filename, command, args }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
   async _postConfig(path, body) {
     const r = await fetch(`${this.base}${path}`, {
       method:  "POST",

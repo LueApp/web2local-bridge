@@ -615,6 +615,11 @@ if (await w2l.isRunning()) {
           <td data-i18n="apiAuthLocal">any (local only)</td>
           <td data-i18n="apiDesc12">Return the last 200 lines of a spawned process's captured output.</td>
         </tr>
+        <tr>
+          <td>POST /deploy</td>
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDescDeploy">Verify SHA-256 → write script to <code>~/.config/web2local/agents/</code> → spawn it. <strong>Always shows the approval dialog</strong>, even for whitelist origins — the dialog shows filename, full SHA-256, destination path, and the exact command. Body: <code>{"source":"…","sha256":"…","filename":"…","command":"python3","args":["serve",…]}</code>. Returns <code>{"pid":…,"path":"…","already_running"?:true}</code>.</td>
+        </tr>
       </tbody>
     </table>
 
@@ -820,6 +825,7 @@ if (await w2l.isRunning()) {
       apiDesc10: 'Stop a spawned process by PID. Body: <code>{"pid":1234}</code>. Sends SIGTERM, then SIGKILL after 3 s.',
       apiDesc11: "List spawned processes still alive (verified via /proc start-time, so PID reuse won't fool it).",
       apiDesc12: "Return the last 200 lines of a spawned process's captured output.",
+      apiDescDeploy: "Verify SHA-256 → write script to <code>~/.config/web2local/agents/</code> → spawn it. <strong>Always shows the approval dialog</strong>, even for whitelist origins — the dialog shows filename, full SHA-256, destination path, and the exact command. Body: <code>{\"source\":\"…\",\"sha256\":\"…\",\"filename\":\"…\",\"command\":\"python3\",\"args\":[\"serve\",…]}</code>. Returns <code>{\"pid\":…,\"path\":\"…\",\"already_running\"?:true}</code>.",
       apiErrorsTitle: "Error responses",
       apiRulesTitle: "Command rules",
       apiRulesList: `<li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
@@ -953,6 +959,7 @@ if (await w2l.isRunning()) {
       apiDesc10: '按 PID 停止已启动的进程。请求体：<code>{"pid":1234}</code>。先发送 SIGTERM，3 秒后未退出则改为 SIGKILL。',
       apiDesc11: "列出仍在运行的已启动进程（通过 /proc 中的启动时间校验，避免 PID 复用造成的误判）。",
       apiDesc12: "返回某个已启动进程最近 200 行的捕获输出。",
+      apiDescDeploy: "验证 SHA-256 → 将脚本写入 <code>~/.config/web2local/agents/</code> → 启动它。<strong>无论来源是白名单还是灰名单，都会显示审批对话框</strong>——对话框会展示文件名、完整 SHA-256、目标路径及确切的执行命令。请求体：<code>{\"source\":\"…\",\"sha256\":\"…\",\"filename\":\"…\",\"command\":\"python3\",\"args\":[\"serve\",…]}</code>。返回 <code>{\"pid\":…,\"path\":\"…\",\"already_running\"?:true}</code>。",
       apiErrorsTitle: "错误响应",
       apiRulesTitle: "命令规则",
       apiRulesList: `<li><code>command</code> 是可执行文件名——不经过 shell，不支持 <code>&&</code>，不支持管道。</li>
