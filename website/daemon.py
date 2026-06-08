@@ -232,6 +232,34 @@ def _proc_tail(log_path: str, lines: int = 200) -> str:
     return "\n".join(data.splitlines()[-lines:])
 
 
+def _read_script_preview(cmd_list: list) -> dict | None:
+    """If cmd_list[1] is an existing .py or .sh file, read and return preview info.
+    Returns None when the command doesn't look like a script invocation."""
+    if len(cmd_list) < 2:
+        return None
+    path = cmd_list[1]
+    if not (path.endswith(".py") or path.endswith(".sh")):
+        return None
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+    except OSError:
+        return None
+    all_lines  = source.splitlines()
+    line_count = len(all_lines)
+    too_long   = line_count > 100
+    preview_src = "\n".join(all_lines[:100]) if too_long else source
+    return {
+        "kind":       "script",
+        "source":     preview_src,
+        "path":       path,
+        "line_count": line_count,
+        "too_long":   too_long,
+    }
+
+
 # ── Agent delivery ───────────────────────────────────────────────────────────
 
 def _deploy_resolve(filename: str, sha256: str) -> str:
@@ -289,7 +317,8 @@ def _run_tk_loop(tk):
             try:
                 item = _dialog_queue.get_nowait()
                 _dialog_active = True
-                if len(item) == 5:
+                extra = item[4] if len(item) == 5 else None
+                if extra and extra.get("kind") == "deploy":
                     _show_deploy_tk_dialog(tk, root, item)
                 else:
                     _show_tk_dialog(tk, root, item)
@@ -303,8 +332,14 @@ def _run_tk_loop(tk):
 
 def _show_tk_dialog(tk, root, item):
     global _dialog_active
-    origin, cmd_list, event, result = item
-    alive = [True]
+    if len(item) == 5:
+        origin, cmd_list, event, result, preview = item
+    else:
+        origin, cmd_list, event, result = item
+        preview = None
+
+    alive  = [True]
+    paused = [False]
 
     dlg = tk.Toplevel(root)
     dlg.title("web2local — Command Approval")
@@ -327,22 +362,18 @@ def _show_tk_dialog(tk, root, item):
     tk.Label(body, text="Command to execute:", font=("Arial", 10, "bold"), anchor="w").pack(fill="x")
 
     frm = tk.Frame(body, relief="sunken", bd=1)
-    frm.pack(fill="both", expand=True, pady=(4, 0))
+    frm.pack(fill="x", pady=(4, 0))
 
-    txt  = tk.Text(frm, font=("Courier", 10), height=9, wrap="none",
+    txt  = tk.Text(frm, font=("Courier", 10), height=4, wrap="none",
                    bg="#1e1e1e", fg="#d4d4d4")
     sb_y = tk.Scrollbar(frm, orient="vertical",   command=txt.yview)
     sb_x = tk.Scrollbar(frm, orient="horizontal", command=txt.xview)
     txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
-
-    # Display command as shell-like string (quoted where needed)
     display = " ".join(
-        f'"{a}"' if (" " in a or not a) else a
-        for a in cmd_list
+        f'"{a}"' if (" " in a or not a) else a for a in cmd_list
     )
     txt.insert("end", display)
     txt.config(state="disabled")
-
     sb_y.pack(side="right",  fill="y")
     sb_x.pack(side="bottom", fill="x")
     txt.pack(fill="both", expand=True)
@@ -351,12 +382,71 @@ def _show_tk_dialog(tk, root, item):
              text="Read the full command carefully. Scroll right if it is long.",
              fg="#cc0000", font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
 
-    remaining  = [120]
-    timer_var  = tk.StringVar(value="Auto-deny in 120 s")
-    tk.Label(body, textvariable=timer_var, fg="#888", font=("Arial", 8), anchor="w").pack(fill="x")
+    # ── Script preview (optional) ──────────────────────────────────────
+    if preview:
+        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(10, 8))
+
+        toggle_row = tk.Frame(body, bg=body["bg"])
+        toggle_row.pack(fill="x")
+
+        pf       = tk.Frame(body)
+        pf_shown = [False]
+
+        src_txt = tk.Text(pf, font=("Courier", 9), height=16, wrap="none",
+                          bg="#0d1117", fg="#c9d1d9")
+        sb_sy   = tk.Scrollbar(pf, orient="vertical",   command=src_txt.yview)
+        sb_sx   = tk.Scrollbar(pf, orient="horizontal", command=src_txt.xview)
+        src_txt.configure(yscrollcommand=sb_sy.set, xscrollcommand=sb_sx.set)
+        src_txt.insert("end", preview["source"])
+        if preview["too_long"]:
+            src_txt.insert("end",
+                f"\n\n… {preview['line_count'] - 100} more lines not shown. "
+                "Open the file directly to review the full script.")
+        src_txt.config(state="disabled")
+        sb_sy.pack(side="right",  fill="y")
+        sb_sx.pack(side="bottom", fill="x")
+        src_txt.pack(fill="both", expand=True)
+
+        def _toggle_preview():
+            if pf_shown[0]:
+                pf.pack_forget()
+                toggle_btn.config(text=f"▶  Show script  ({preview['line_count']} lines)")
+                pf_shown[0] = False
+            else:
+                pf.pack(fill="both", expand=True, pady=(6, 0))
+                toggle_btn.config(text=f"▼  Hide script  ({preview['line_count']} lines)")
+                pf_shown[0] = True
+
+        toggle_btn = tk.Button(
+            toggle_row,
+            text=f"▶  Show script  ({preview['line_count']} lines)",
+            command=_toggle_preview,
+            bg=body["bg"], fg="#58a6ff", relief="flat",
+            font=("Arial", 9, "bold"), anchor="w", cursor="hand2",
+            activebackground=body["bg"], activeforeground="#79c0ff",
+        )
+        toggle_btn.pack(side="left")
+
+        if preview["too_long"]:
+            def _pause():
+                paused[0] = True
+                pause_btn.config(state="disabled",
+                                 text="⏸  Paused — click Allow or Deny when ready")
+            pause_btn = tk.Button(
+                toggle_row, text="⏸  Pause auto-deny", command=_pause,
+                bg="#2d3748", fg="#e3b341", relief="flat",
+                font=("Arial", 9), padx=10, cursor="hand2",
+            )
+            pause_btn.pack(side="right")
+
+    # ── Timer ─────────────────────────────────────────────────────────
+    remaining = [120]
+    timer_var = tk.StringVar(value="Auto-deny in 120 s")
+    tk.Label(body, textvariable=timer_var, fg="#888",
+             font=("Arial", 8), anchor="w").pack(fill="x", pady=(8, 0))
 
     def _tick():
-        if not alive[0]:
+        if not alive[0] or paused[0]:
             return
         remaining[0] -= 1
         if remaining[0] <= 0:
@@ -391,7 +481,6 @@ def _show_tk_dialog(tk, root, item):
 
     btn = tk.Frame(dlg, padx=22, pady=14)
     btn.pack(fill="x")
-
     tk.Button(btn, text="Deny", command=_deny,
               bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
               width=12, relief="flat", pady=6).pack(side="left")
@@ -406,13 +495,15 @@ def _show_tk_dialog(tk, root, item):
 
 
 def _show_deploy_tk_dialog(tk, root, item):
-    """Deploy-specific approval dialog: shows filename, full SHA-256, destination, and command."""
+    """Deploy-specific approval dialog: shows filename, full SHA-256, destination, command, and source."""
     global _dialog_active
     origin, cmd_list, event, result, meta = item
     filename  = meta["filename"]
     sha256    = meta["sha256"]
     dest_path = meta["dest_path"]
+    source    = meta.get("source", "")
     alive     = [True]
+    paused    = [False]
 
     dlg = tk.Toplevel(root)
     dlg.title("web2local — Script Deploy & Run Approval")
@@ -476,6 +567,69 @@ def _show_deploy_tk_dialog(tk, root, item):
     sb_x.pack(side="bottom", fill="x")
     txt.pack(fill="both", expand=True)
 
+    # ── Source preview (always shown for deploy) ──────────────────────
+    if source:
+        tk.Frame(body, bg="#30363d", height=1).pack(fill="x", pady=(10, 8))
+
+        src_lines  = source.splitlines()
+        line_count = len(src_lines)
+        too_long   = line_count > 100
+        display_src = "\n".join(src_lines[:100]) if too_long else source
+
+        preview_row = tk.Frame(body, bg=body["bg"])
+        preview_row.pack(fill="x")
+
+        pf       = tk.Frame(body)
+        pf_shown = [True]   # expanded by default for deploy
+
+        src_txt = tk.Text(pf, font=("Courier", 9), height=16, wrap="none",
+                          bg="#0d1117", fg="#c9d1d9")
+        sb_sy   = tk.Scrollbar(pf, orient="vertical",   command=src_txt.yview)
+        sb_sx   = tk.Scrollbar(pf, orient="horizontal", command=src_txt.xview)
+        src_txt.configure(yscrollcommand=sb_sy.set, xscrollcommand=sb_sx.set)
+        src_txt.insert("end", display_src)
+        if too_long:
+            src_txt.insert("end",
+                f"\n\n… {line_count - 100} more lines not shown. "
+                "Open the file directly to review the full script.")
+        src_txt.config(state="disabled")
+        sb_sy.pack(side="right",  fill="y")
+        sb_sx.pack(side="bottom", fill="x")
+        src_txt.pack(fill="both", expand=True)
+        pf.pack(fill="both", expand=True, pady=(6, 0))
+
+        def _toggle_src():
+            if pf_shown[0]:
+                pf.pack_forget()
+                toggle_src_btn.config(text=f"▶  Show script source  ({line_count} lines)")
+                pf_shown[0] = False
+            else:
+                pf.pack(fill="both", expand=True, pady=(6, 0))
+                toggle_src_btn.config(text=f"▼  Hide script source  ({line_count} lines)")
+                pf_shown[0] = True
+
+        toggle_src_btn = tk.Button(
+            preview_row,
+            text=f"▼  Hide script source  ({line_count} lines)",
+            command=_toggle_src,
+            bg=body["bg"], fg="#58a6ff", relief="flat",
+            font=("Arial", 9, "bold"), anchor="w", cursor="hand2",
+            activebackground=body["bg"], activeforeground="#79c0ff",
+        )
+        toggle_src_btn.pack(side="left")
+
+        if too_long:
+            def _pause_deploy():
+                paused[0] = True
+                pause_deploy_btn.config(state="disabled",
+                                        text="⏸  Paused — click Allow or Deny when ready")
+            pause_deploy_btn = tk.Button(
+                preview_row, text="⏸  Pause auto-deny", command=_pause_deploy,
+                bg="#2d3748", fg="#e3b341", relief="flat",
+                font=("Arial", 9), padx=10, cursor="hand2",
+            )
+            pause_deploy_btn.pack(side="right")
+
     tk.Label(body,
              text="Verify the SHA-256 above against what the website published before approving.",
              fg="#cc0000", font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
@@ -485,7 +639,7 @@ def _show_deploy_tk_dialog(tk, root, item):
     tk.Label(body, textvariable=timer_var, fg="#888", font=("Arial", 8), anchor="w").pack(fill="x")
 
     def _tick():
-        if not alive[0]:
+        if not alive[0] or paused[0]:
             return
         remaining[0] -= 1
         if remaining[0] <= 0:
@@ -541,16 +695,41 @@ def _run_terminal_loop():
             sep  = "=" * 60
             if len(item) == 5:
                 origin, cmd_list, event, result, meta = item
-                print(f"\n{sep}")
-                print("[web2local] SCRIPT DEPLOY & RUN APPROVAL REQUIRED")
-                print(sep)
-                print(f"  Site        : {origin}")
-                print(f"  File        : {meta['filename']}")
-                print(f"  SHA-256     : {meta['sha256']}")
-                print(f"  Destination : {meta['dest_path']}")
-                print(f"  Command     : {' '.join(cmd_list)}")
-                print(f"{sep}")
-                print("  Verify the SHA-256 before answering.")
+                kind = meta.get("kind", "deploy")
+                if kind == "deploy":
+                    print(f"\n{sep}")
+                    print("[web2local] SCRIPT DEPLOY & RUN APPROVAL REQUIRED")
+                    print(sep)
+                    print(f"  Site        : {origin}")
+                    print(f"  File        : {meta['filename']}")
+                    print(f"  SHA-256     : {meta['sha256']}")
+                    print(f"  Destination : {meta['dest_path']}")
+                    print(f"  Command     : {' '.join(cmd_list)}")
+                    src = meta.get("source", "")
+                    if src:
+                        lines = src.splitlines()[:20]
+                        print(f"\n  --- Script preview (first {len(lines)} lines) ---")
+                        for ln in lines:
+                            print(f"  {ln}")
+                        print(f"  ---")
+                    print(sep)
+                    print("  Verify the SHA-256 before answering.")
+                else:  # kind == "script"
+                    origin, cmd_list, event, result, preview = item
+                    print(f"\n{sep}")
+                    print("[web2local] COMMAND APPROVAL REQUIRED")
+                    print(sep)
+                    print(f"  Site   : {origin}")
+                    print(f"  Command: {' '.join(cmd_list)}")
+                    src = preview.get("source", "")
+                    if src:
+                        lines = src.splitlines()[:20]
+                        print(f"\n  --- Script preview (first {len(lines)} of "
+                              f"{preview['line_count']} lines) ---")
+                        for ln in lines:
+                            print(f"  {ln}")
+                        print(f"  ---")
+                    print(sep)
             else:
                 origin, cmd_list, event, result = item
                 display = " ".join(cmd_list)
@@ -571,26 +750,34 @@ def _run_terminal_loop():
             pass
 
 
-def _request_approval(origin: str, cmd_list: list) -> bool:
-    """Queue a command approval dialog and block until the user responds."""
+def _request_approval(origin: str, cmd_list: list,
+                       preview: dict | None = None) -> bool:
+    """Queue a command approval dialog and block until the user responds.
+    Pass preview=dict (from _read_script_preview) to show the script source."""
     event  = threading.Event()
     result = [False]
-    _dialog_queue.put((origin, cmd_list, event, result))
+    if preview:
+        _dialog_queue.put((origin, cmd_list, event, result, preview))
+    else:
+        _dialog_queue.put((origin, cmd_list, event, result))
     event.wait(timeout=135)
     return result[0]
 
 
 def _request_deploy_approval(origin: str, filename: str, sha256: str,
-                              dest_path: str, cmd_list: list) -> bool:
-    """Queue a deploy approval dialog (5-tuple) and block until the user responds.
+                              dest_path: str, cmd_list: list,
+                              source: str = "") -> bool:
+    """Queue a deploy approval dialog and block until the user responds.
     Always shown — even for whitelist origins — because writing executable code
     to disk is categorically more powerful than running a known command."""
     event  = threading.Event()
     result = [False]
     _dialog_queue.put((origin, cmd_list, event, result, {
+        "kind":      "deploy",
         "filename":  filename,
         "sha256":    sha256,
         "dest_path": dest_path,
+        "source":    source,
     }))
     event.wait(timeout=135)
     return result[0]
@@ -782,9 +969,10 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
 
             cmd_list = [command] + args
+            preview  = _read_script_preview(cmd_list)
 
             if classification == "graylist":
-                approved = _request_approval(origin, ["[spawn]"] + cmd_list)
+                approved = _request_approval(origin, ["[spawn]"] + cmd_list, preview)
                 if not approved:
                     _send_json(self, 403, {"error": "spawn denied by user"}, origin)
                     _audit("DENIED", origin, cmd_list, "spawn_denied_by_user")
@@ -889,7 +1077,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             # Always show the deploy dialog — whitelist or graylist.
-            approved = _request_deploy_approval(origin, filename, sha256, dest_path, cmd_list)
+            approved = _request_deploy_approval(origin, filename, sha256, dest_path, cmd_list, source)
             if not approved:
                 _send_json(self, 403, {"error": "deploy denied by user"}, origin)
                 _audit("DENIED", origin, [filename, sha256[:8]], "deploy_denied_by_user")
@@ -943,9 +1131,10 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
 
             cmd_list = [command] + args
+            preview  = _read_script_preview(cmd_list)
 
             if classification == "graylist":
-                approved = _request_approval(origin, cmd_list)
+                approved = _request_approval(origin, cmd_list, preview)
                 if not approved:
                     _send_json(self, 403, {"error": "command denied by user"}, origin)
                     _audit("DENIED", origin, cmd_list, "denied_by_user")
