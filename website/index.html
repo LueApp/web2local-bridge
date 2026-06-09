@@ -239,11 +239,9 @@
       font-family: var(--mono); font-size: .78rem; color: var(--text);
       background: #010409; border: 1px solid var(--border); border-radius: 5px;
       padding: 10px 12px; line-height: 1.55;
-      overflow-x: auto; white-space: pre; max-width: 100%;
+      white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+      max-width: 100%;
     }
-    .proc-cmd::-webkit-scrollbar { height: 6px; }
-    .proc-cmd::-webkit-scrollbar-track { background: transparent; }
-    .proc-cmd::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .btn-mini {
       padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer;
       font-size: .75rem; font-weight: 600; white-space: nowrap;
@@ -811,7 +809,7 @@ if (await w2l.isRunning()) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <h3 style="margin:0" data-i18n="procRunningTitle">Running processes</h3>
         <button class="btn btn-ghost" style="font-size:.78rem;padding:5px 12px"
-                onclick="refreshProcs()" data-i18n="procRefreshBtn">Refresh</button>
+                onclick="refreshProcs({ force: true })" data-i18n="procRefreshBtn">Refresh</button>
       </div>
       <div id="proc-list"><span class="empty-list" data-i18n="demoLoading">Loading…</span></div>
 
@@ -1379,7 +1377,7 @@ if (await w2l.isRunning()) {
     try {
       const r = await w2l.spawn(cmd, args);
       alert(t("procSpawned") + " PID " + r.pid);
-      refreshProcs();
+      refreshProcs({ force: true });
     } catch (e) {
       alert("Error: " + e.message);
     }
@@ -1399,7 +1397,8 @@ if (await w2l.isRunning()) {
   // Render an argv list back to a readable command line, re-quoting args
   // that contain spaces or shell-significant characters.
   function formatArgv(argv) {
-    return argv.map(a => {
+    return (Array.isArray(argv) ? argv : []).map(arg => {
+      const a = String(arg);
       if (a === "" || /[\s"'`$()&|;<>*?#\\]/.test(a)) {
         return '"' + a.replace(/(["\\])/g, "\\$1") + '"';
       }
@@ -1407,22 +1406,62 @@ if (await w2l.isRunning()) {
     }).join(" ");
   }
 
-  async function refreshProcs() {
+  let _procRenderKey = "";
+  let _procListHovered = false;
+  let _procListHoldUntil = 0;
+
+  function holdProcRefresh(ms = 8000) {
+    _procListHoldUntil = Date.now() + ms;
+  }
+
+  function procListHasSelection(el) {
+    const sel = window.getSelection ? window.getSelection() : null;
+    return !!(sel && !sel.isCollapsed &&
+      (el.contains(sel.anchorNode) || el.contains(sel.focusNode)));
+  }
+
+  function procListIsBusy(el) {
+    return _procListHovered || Date.now() < _procListHoldUntil || procListHasSelection(el);
+  }
+
+  function procRenderKey(procs) {
+    return JSON.stringify({
+      lang: CUR_LANG,
+      procs: procs.map(p => ({
+        pid:        p.pid,
+        started_at: p.started_at || "",
+        origin:     p.origin || "",
+        command:    Array.isArray(p.command) ? p.command : [],
+      })),
+    });
+  }
+
+  async function refreshProcs({ force = false } = {}) {
     const el = document.getElementById("proc-list");
     let data;
     try { data = await w2l.ps(); }
     catch {
+      const nextKey = `error:${CUR_LANG}`;
+      if (!force && nextKey === _procRenderKey) return;
+      if (!force && procListIsBusy(el)) return;
+      _procRenderKey = nextKey;
       el.innerHTML = `<span class="empty-list">${t("demoListUnavailable")}</span>`;
       return;
     }
     const procs = data.processes || [];
+    const nextKey = procRenderKey(procs);
+    if (!force && nextKey === _procRenderKey) return;
+    if (!force && procListIsBusy(el)) return;
+    _procRenderKey = nextKey;
     if (procs.length === 0) {
       el.innerHTML = `<span class="empty-list">${t("procNone")}</span>`;
       return;
     }
     el.innerHTML = `
       <div class="proc-list">
-        ${procs.map(p => `
+        ${procs.map(p => {
+          const cmdText = escapeHtml(formatArgv(p.command));
+          return `
           <div class="proc-card">
             <div class="proc-card-head">
               <span class="proc-pid" title="${t("procThPid")}">PID ${p.pid}</span>
@@ -1441,8 +1480,9 @@ if (await w2l.isRunning()) {
                 <button class="btn-mini stop" onclick="stopProc(${p.pid})">${t("procBtnStop")}</button>
               </div>
             </div>
-            <div class="proc-cmd">${escapeHtml(formatArgv(p.command))}</div>
-          </div>`).join("")}
+            <div class="proc-cmd" title="${cmdText}">${cmdText}</div>
+          </div>`;
+        }).join("")}
       </div>`;
   }
 
@@ -1450,7 +1490,7 @@ if (await w2l.isRunning()) {
     if (!confirm(t("procConfirmStop") + " PID " + pid + "?")) return;
     try {
       const r = await w2l.stop(pid);
-      refreshProcs();
+      refreshProcs({ force: true });
       if (r.status === "stopped" && r.signal === "SIGKILL") {
         alert(t("procStoppedKilled"));
       }
@@ -1546,6 +1586,11 @@ if (await w2l.isRunning()) {
     document.getElementById("cmd-input").addEventListener("keydown", e => {
       if (e.key === "Enter") runCmd();
     });
+    const procList = document.getElementById("proc-list");
+    procList.addEventListener("mouseenter", () => { _procListHovered = true; });
+    procList.addEventListener("mouseleave", () => { _procListHovered = false; });
+    procList.addEventListener("pointerdown", () => holdProcRefresh());
+    procList.addEventListener("scroll", () => holdProcRefresh(), true);
 
     // Choose initial language: localStorage > browser preference > en
     const saved = localStorage.getItem("w2l-lang");
