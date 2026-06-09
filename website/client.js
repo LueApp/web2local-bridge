@@ -233,6 +233,27 @@ class Web2Local {
   }
 
   /**
+   * Select an existing Python environment or interpreter for future bare
+   * "python3" requests. `path` must be an env prefix or Python executable under
+   * the user's home directory. The daemon shows a native approval dialog before
+   * persisting config["python"].
+   *
+   * @param {string} path - e.g. "~/.venv" or "~/miniconda3/envs/myapp".
+   * @returns {Promise<{status:"selected", interpreter:string|null, source:string,
+   *                    config_python:string, already_selected?:boolean}>}
+   */
+  async selectEnv(path) {
+    const r = await fetch(`${this.base}/env/select`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ path }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  /**
    * Ask the daemon to CREATE a python environment when the user has none set up.
    * The user picks the type on your page; the daemon shows a native approval
    * dialog, then creates it asynchronously. On success it points config["python"]

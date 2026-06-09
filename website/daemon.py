@@ -664,6 +664,53 @@ def _interp_ready(interp: str) -> bool:
     return bool(interp) and os.path.isfile(interp) and os.access(interp, os.X_OK)
 
 
+def _looks_like_python(path: str) -> bool:
+    """Heuristic: does this file's NAME look like a python interpreter? Name-based
+    on purpose — we must not execute an unknown binary before the user approves
+    it; the approval dialog shows the resolved path for the user to confirm."""
+    base = os.path.basename(path).lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    return bool(re.fullmatch(r"python(?:w)?(?:[23](?:\.\d{1,2})?)?", base))
+
+
+def _resolve_select_path(raw: str) -> str:
+    """Validate a user-proposed env path and return the interpreter to select.
+    Accepts an env PREFIX (→ its bin/python) or a python EXECUTABLE. Confined to
+    $HOME. Raises ValueError (user-facing message) on any problem."""
+    p = os.path.expanduser(os.path.expandvars(raw.strip()))
+    if not p:
+        raise ValueError("path is required")
+    p = os.path.abspath(p)
+    if not os.path.exists(p):
+        raise ValueError(f"path does not exist: {raw}")
+    # Confinement: resolve symlinks of the CONTAINING dir, never the interpreter
+    # symlink itself (a venv's bin/python legitimately points at the base python
+    # outside $HOME). Anchor on the dir so a symlinked prefix can't escape.
+    home   = os.path.realpath(os.path.expanduser("~"))
+    anchor = os.path.realpath(p if os.path.isdir(p) else os.path.dirname(p))
+    if not (anchor == home or anchor.startswith(home + os.sep)):
+        raise ValueError("path must be inside your home directory")
+    if os.path.isdir(p):
+        exe = _python_exe_for_prefix(p)
+        if not exe:
+            raise ValueError(f"no python interpreter found under {raw}")
+    else:
+        if not (os.path.isfile(p) and os.access(p, os.X_OK)):
+            raise ValueError("path is not an executable file")
+        if not _looks_like_python(p):
+            raise ValueError("file does not look like a python interpreter")
+        exe = p
+    # If the interpreter is a symlink, its TARGET must also look like python.
+    # Otherwise a file named "python" could point at /bin/sh (or a planted script)
+    # — it would pass the name check, then run silently via a later /run. A real
+    # venv's bin/python → .../pythonX.Y still passes (target is named python).
+    real = os.path.realpath(exe)
+    if real != exe and not _looks_like_python(real):
+        raise ValueError("interpreter resolves to a non-python target")
+    return exe
+
+
 # Setup jobs run in their own thread (multi-step recipes), tracked in-memory.
 # Growth is human-gated (every job needs an approved dialog) and flood-limited,
 # but we still cap the registry so a long-lived daemon doesn't accrete forever.
@@ -1721,7 +1768,11 @@ class Handler(BaseHTTPRequestHandler):
     def _read_body(self) -> dict:
         n    = int(self.headers.get("Content-Length", 0))
         raw  = self.rfile.read(n) if n else b"{}"
-        return json.loads(raw)
+        obj  = json.loads(raw)
+        # A valid-but-non-object body ([], "x", 42, null) would otherwise pass the
+        # JSON parse and then blow up on data.get(...) — coerce to {} so each
+        # endpoint's own field validation returns a clean 400.
+        return obj if isinstance(obj, dict) else {}
 
     # ── CORS preflight ──
 
@@ -1730,9 +1781,12 @@ class Handler(BaseHTTPRequestHandler):
         path   = self.path.split("?")[0]
         if not self._host_ok():
             self.send_response(403); self.end_headers(); return
-        # Execution endpoints require origin to be in a list.
-        # Config endpoints have no such restriction — that's how you add yourself.
-        if path in ("/run", "/spawn", "/stop", "/deploy") and not self._classify(origin):
+        # Execution / config-mutating endpoints require origin to be in a list.
+        # Plain config endpoints have no such restriction — that's how you add
+        # yourself. (Trusted origins still preflight fine; only untrusted ones are
+        # rejected here, matching the POST-time _classify gate.)
+        if path in ("/run", "/spawn", "/stop", "/deploy", "/setup-env", "/env/select") \
+                and not self._classify(origin):
             self.send_response(403); self.end_headers(); return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin",          origin)
@@ -1818,6 +1872,8 @@ class Handler(BaseHTTPRequestHandler):
             _send_json(self, 200, {
                 "interpreter":   exe,            # null → falls back to PATH python3
                 "source":        source,         # config | active-env | path
+                                                 # ("project" only appears per-script
+                                                 #  at run time, never for this call)
                 "config_python": cfg_python if isinstance(cfg_python, str) else "",
                 "active": {
                     "VIRTUAL_ENV":  os.environ.get("VIRTUAL_ENV", ""),
@@ -2031,6 +2087,54 @@ class Handler(BaseHTTPRequestHandler):
                 "log_path":    job["log_path"],
                 "target":      target,
                 "interpreter": interpreter,   # where it WILL be once the job finishes
+            }, origin)
+            return
+
+        # ── /env/select — adopt an EXISTING interpreter/env as config["python"] ──
+        # The page proposes a path (env prefix or python executable); the daemon
+        # validates + confines it to $HOME, shows a native approval dialog (unless
+        # it is already the selected interpreter), and persists config["python"].
+
+        if path == "/env/select":
+            classification = self._classify(origin)
+            if not classification:
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                _audit("BLOCKED", origin or "unknown", [], "not_in_list")
+                return
+
+            raw = data.get("path", "")
+            if not isinstance(raw, str) or not raw:
+                _send_json(self, 400, {"error": "path must be a non-empty string"}, origin); return
+            try:
+                interpreter = _resolve_select_path(raw)
+            except ValueError as e:
+                _send_json(self, 400, {"error": str(e)}, origin); return
+
+            # Resolve the stored config value the same way (it may be a prefix or a
+            # bare name) so re-selecting an equivalent env is recognised as a no-op.
+            current  = _get_config().get("python")
+            cur_exe  = _interp_from_hint(current) if isinstance(current, str) and current.strip() else None
+            cur_norm = os.path.normpath(cur_exe) if cur_exe else ""
+            already  = cur_norm == os.path.normpath(interpreter)
+
+            if not already:
+                # Show the symlink target too, so the user consents to what will
+                # actually run, not just the friendly path.
+                real = os.path.realpath(interpreter)
+                disp = ["[env/select]", interpreter] + (["->", real] if real != interpreter else [])
+                if not _request_approval(origin, disp):
+                    _send_json(self, 403, {"error": "selection denied by user"}, origin)
+                    _audit("DENIED", origin, [interpreter], "select_denied_by_user")
+                    return
+                _setup_persist_python(interpreter)
+                _audit("SETUP", origin, [interpreter, real], "env_selected")
+
+            _send_json(self, 200, {
+                "status":           "selected",
+                "interpreter":      interpreter,
+                "source":           "config",
+                "config_python":    interpreter,
+                "already_selected": already,
             }, origin)
             return
 

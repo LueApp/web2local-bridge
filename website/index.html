@@ -668,6 +668,11 @@ if (await w2l.isRunning()) {
           <td data-i18n-html="apiDescEnv">Report which python interpreter a bare <code>python3</code> resolves to, and why. Returns <code>{"interpreter":…,"source":"config|active-env|path","config_python":"…"}</code>.</td>
         </tr>
         <tr>
+          <td>POST /env/select</td>
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDescSelectEnv">Select an existing python environment or interpreter under <code>$HOME</code>. Body: <code>{"path":"~/.venv"}</code>. <strong>Always shows the approval dialog.</strong> On approval it points <code>config["python"]</code> at the resolved interpreter.</td>
+        </tr>
+        <tr>
           <td>POST /setup-env</td>
           <td data-i18n="apiAuthListed">whitelist / graylist</td>
           <td data-i18n-html="apiDescSetupEnv">Create a python environment the user has none of. Body: <code>{"type":"venv|pixi|conda","name":"myapp","packages":["flask"]}</code> (or a <code>path</code> inside <code>$HOME</code> instead of <code>name</code>). <strong>Always shows the approval dialog.</strong> Runs as an async job; on success it points <code>config["python"]</code> at the new interpreter. Returns <code>{"status":"running","job_id":"…","interpreter":"…"}</code> (or <code>{"status":"ready"}</code> if it already exists).</td>
@@ -676,6 +681,11 @@ if (await w2l.isRunning()) {
           <td>GET /setup-env/status?job=ID</td>
           <td data-i18n="apiAuthListed">whitelist / graylist</td>
           <td data-i18n-html="apiDescSetupStatus">Poll a setup job. Returns <code>{"status":"running|done|failed","interpreter":…,"tail":"…"}</code> with the live setup log.</td>
+        </tr>
+        <tr>
+          <td>POST /env/select</td>
+          <td data-i18n="apiAuthListed">whitelist / graylist</td>
+          <td data-i18n-html="apiDescSelect">Select an <em>existing</em> environment. Body: <code>{"path":"~/.venv"}</code> — an env prefix (<code>~/.venv</code>, <code>~/miniconda3/envs/foo</code>, <code>~/p/.pixi/envs/default</code>) or a python executable (<code>~/.venv/bin/python</code>). Must exist and live inside <code>$HOME</code>. <strong>Shows the approval dialog</strong> (unless already selected), then sets <code>config["python"]</code>. Returns <code>{"status":"selected","interpreter":"…","already_selected":bool}</code>.</td>
         </tr>
       </tbody>
     </table>
@@ -695,9 +705,11 @@ if (await w2l.isRunning()) {
       <li>The process inherits the daemon's environment and working directory.</li>
       <li>A bare <code>python</code>/<code>python3</code> runs in <em>your</em> selected
           environment (pixi/conda/venv): set <code>"python"</code> in
-          <code>config.json</code>, or rely on auto-detection of a project-local
-          <code>.venv</code>/<code>.pixi</code> or the daemon's active env. The page
-          never picks the interpreter; <code>GET /env</code> shows the resolution.</li>
+          <code>config.json</code>, approve <code>POST /env/select</code> or
+          <code>POST /setup-env</code>, or rely on auto-detection of a
+          project-local <code>.venv</code>/<code>.pixi</code> or the daemon's
+          active env. Pages propose environment changes; the daemon validates
+          and persists them only after local approval.</li>
     </ul>
   </section>
 
@@ -737,9 +749,16 @@ if (await w2l.isRunning()) {
         </select>
         <input id="env-name" type="text" data-i18n-placeholder="demoEnvNamePlaceholder"
                placeholder="env name (e.g. myapp)" value="myapp" />
+        <input id="env-path" type="text" data-i18n-placeholder="demoEnvPathPlaceholder"
+               placeholder="create path (optional)" value="" />
         <input id="env-packages" type="text" data-i18n-placeholder="demoEnvPkgPlaceholder"
                placeholder="packages, space-separated (optional)" value="" />
         <button class="btn btn-primary" onclick="setupEnvDemo()" data-i18n="demoEnvBtn">Set up</button>
+      </div>
+      <div class="input-row" style="margin-top:10px">
+        <input id="env-existing-path" type="text" data-i18n-placeholder="demoEnvSelectPlaceholder"
+               placeholder="existing env path (e.g. ~/.venv)" value="" />
+        <button class="btn btn-ghost" onclick="selectEnvDemo()" data-i18n="demoEnvSelectBtn">Use existing</button>
       </div>
       <div id="env-output" class="out-dim" data-i18n="demoEnvOutputPlaceholder">The setup log will appear here.</div>
     </div>
@@ -930,8 +949,10 @@ if (await w2l.isRunning()) {
       apiDesc12: "Return the last 200 lines of a spawned process's captured output.",
       apiDescDeploy: "Verify SHA-256 → write script to <code>~/.config/web2local/agents/</code> → spawn it. <strong>Always shows the approval dialog</strong>, even for whitelist origins — the dialog shows filename, full SHA-256, destination path, and the exact command. Body: <code>{\"source\":\"…\",\"sha256\":\"…\",\"filename\":\"…\",\"command\":\"python3\",\"args\":[\"serve\",…]}</code>. Returns <code>{\"pid\":…,\"path\":\"…\",\"already_running\"?:true}</code>.",
       apiDescEnv: "Report which python interpreter a bare <code>python3</code> resolves to, and why. Returns <code>{\"interpreter\":…,\"source\":\"config|active-env|path\",\"config_python\":\"…\"}</code>.",
+      apiDescSelectEnv: "Select an existing python environment or interpreter under <code>$HOME</code>. Body: <code>{\"path\":\"~/.venv\"}</code>. <strong>Always shows the approval dialog.</strong> On approval it points <code>config[\"python\"]</code> at the resolved interpreter.",
       apiDescSetupEnv: "Create a python environment the user has none of. Body: <code>{\"type\":\"venv|pixi|conda\",\"name\":\"myapp\",\"packages\":[\"flask\"]}</code> (or a <code>path</code> inside <code>$HOME</code> instead of <code>name</code>). <strong>Always shows the approval dialog.</strong> Runs as an async job; on success it points <code>config[\"python\"]</code> at the new interpreter. Returns <code>{\"status\":\"running\",\"job_id\":\"…\",\"interpreter\":\"…\"}</code> (or <code>{\"status\":\"ready\"}</code> if it already exists).",
       apiDescSetupStatus: "Poll a setup job. Returns <code>{\"status\":\"running|done|failed\",\"interpreter\":…,\"tail\":\"…\"}</code> with the live setup log.",
+      apiDescSelect: "Select an <em>existing</em> environment. Body: <code>{\"path\":\"~/.venv\"}</code> — an env prefix (<code>~/.venv</code>, <code>~/miniconda3/envs/foo</code>, <code>~/p/.pixi/envs/default</code>) or a python executable (<code>~/.venv/bin/python</code>). Must exist and live inside <code>$HOME</code>. <strong>Shows the approval dialog</strong> (unless already selected), then sets <code>config[\"python\"]</code>. Returns <code>{\"status\":\"selected\",\"interpreter\":\"…\",\"already_selected\":bool}</code>.",
       apiErrorsTitle: "Error responses",
       apiRulesTitle: "Command rules",
       apiRulesList: `<li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
@@ -940,9 +961,11 @@ if (await w2l.isRunning()) {
         <li>The process inherits the daemon's environment and working directory.</li>
         <li>A bare <code>python</code>/<code>python3</code> runs in <em>your</em> selected
             environment (pixi/conda/venv): set <code>"python"</code> in
-            <code>config.json</code>, or rely on auto-detection of a project-local
-            <code>.venv</code>/<code>.pixi</code> or the daemon's active env. The page
-            never picks the interpreter; <code>GET /env</code> shows the resolution.</li>`,
+            <code>config.json</code>, approve <code>POST /env/select</code> or
+            <code>POST /setup-env</code>, or rely on auto-detection of a
+            project-local <code>.venv</code>/<code>.pixi</code> or the daemon's active
+            env. Pages propose environment changes; the daemon validates and persists
+            them only after local approval.</li>`,
 
       demoTitle: "Live demo",
       demoIntro: "This page connects to your local daemon in real time.",
@@ -957,8 +980,14 @@ if (await w2l.isRunning()) {
       demoEnvTitle: "Set up a Python environment",
       demoEnvIntro: "No python env yet? Pick a type and the daemon will create one (with your approval) and use it for future scripts.",
       demoEnvNamePlaceholder: "env name (e.g. myapp)",
+      demoEnvPathPlaceholder: "create path, optional (e.g. ~/envs/myapp)",
       demoEnvPkgPlaceholder: "packages, space-separated (optional)",
       demoEnvBtn: "Set up",
+      demoEnvSelectPlaceholder: "existing env path (e.g. ~/.venv)",
+      demoEnvSelectBtn: "Use existing",
+      demoEnvEnterPath: "Enter an existing env path first.",
+      demoEnvSelectRequesting: "Requesting selection — approve the dialog on your machine…",
+      demoEnvSelected: "Selected environment:",
       demoEnvOutputPlaceholder: "The setup log will appear here.",
       demoManageTitle: "Manage lists",
       demoWhitelistLabel: "✅ Whitelist",
@@ -1088,15 +1117,17 @@ if (await w2l.isRunning()) {
       apiDesc12: "返回某个已启动进程最近 200 行的捕获输出。",
       apiDescDeploy: "验证 SHA-256 → 将脚本写入 <code>~/.config/web2local/agents/</code> → 启动它。<strong>无论来源是白名单还是灰名单，都会显示审批对话框</strong>——对话框会展示文件名、完整 SHA-256、目标路径及确切的执行命令。请求体：<code>{\"source\":\"…\",\"sha256\":\"…\",\"filename\":\"…\",\"command\":\"python3\",\"args\":[\"serve\",…]}</code>。返回 <code>{\"pid\":…,\"path\":\"…\",\"already_running\"?:true}</code>。",
       apiDescEnv: "报告裸 <code>python3</code> 会解析到哪个 python 解释器，以及原因。返回 <code>{\"interpreter\":…,\"source\":\"config|active-env|path\",\"config_python\":\"…\"}</code>。",
+      apiDescSelectEnv: "选择 <code>$HOME</code> 下已有的 python 环境或解释器。请求体：<code>{\"path\":\"~/.venv\"}</code>。<strong>始终显示审批对话框。</strong>批准后会将 <code>config[\"python\"]</code> 指向解析出的解释器。",
       apiDescSetupEnv: "为尚无 python 环境的用户创建一个环境。请求体：<code>{\"type\":\"venv|pixi|conda\",\"name\":\"myapp\",\"packages\":[\"flask\"]}</code>（也可用 <code>$HOME</code> 内的 <code>path</code> 代替 <code>name</code>）。<strong>始终显示审批对话框。</strong>以异步任务运行；成功后会将 <code>config[\"python\"]</code> 指向新解释器。返回 <code>{\"status\":\"running\",\"job_id\":\"…\",\"interpreter\":\"…\"}</code>（若已存在则返回 <code>{\"status\":\"ready\"}</code>）。",
       apiDescSetupStatus: "轮询设置任务。返回 <code>{\"status\":\"running|done|failed\",\"interpreter\":…,\"tail\":\"…\"}</code>，附带实时设置日志。",
+      apiDescSelect: "选择一个<em>已存在</em>的环境。请求体：<code>{\"path\":\"~/.venv\"}</code>——可为环境前缀（<code>~/.venv</code>、<code>~/miniconda3/envs/foo</code>、<code>~/p/.pixi/envs/default</code>）或 python 可执行文件（<code>~/.venv/bin/python</code>）。必须存在且位于 <code>$HOME</code> 内。<strong>会显示审批对话框</strong>（除非已选中），然后设置 <code>config[\"python\"]</code>。返回 <code>{\"status\":\"selected\",\"interpreter\":\"…\",\"already_selected\":bool}</code>。",
       apiErrorsTitle: "错误响应",
       apiRulesTitle: "命令规则",
       apiRulesList: `<li><code>command</code> 是可执行文件名——不经过 shell，不支持 <code>&&</code>，不支持管道。</li>
         <li><code>args</code> 是字符串列表——每个元素对应一个参数。</li>
         <li>命令 30 秒后自动超时。</li>
         <li>子进程继承服务的环境变量和工作目录。</li>
-        <li>裸 <code>python</code>/<code>python3</code> 会在<em>你</em>选择的环境（pixi/conda/venv）中运行：在 <code>config.json</code> 中设置 <code>"python"</code>，或依赖对项目本地 <code>.venv</code>/<code>.pixi</code> 或服务当前激活环境的自动检测。页面无法选择解释器；<code>GET /env</code> 可查看解析结果。</li>`,
+        <li>裸 <code>python</code>/<code>python3</code> 会在<em>你</em>选择的环境（pixi/conda/venv）中运行：在 <code>config.json</code> 中设置 <code>"python"</code>，批准 <code>POST /env/select</code> 或 <code>POST /setup-env</code>，或依赖对项目本地 <code>.venv</code>/<code>.pixi</code> 或服务当前激活环境的自动检测。页面只能提出环境变更，服务会验证并在本机批准后才保存。</li>`,
 
       demoTitle: "实时演示",
       demoIntro: "本页面会实时连接到你的本地服务。",
@@ -1111,8 +1142,14 @@ if (await w2l.isRunning()) {
       demoEnvTitle: "搭建 Python 环境",
       demoEnvIntro: "还没有 python 环境？选择一种类型，服务会（在你批准后）创建它，并用于以后的脚本。",
       demoEnvNamePlaceholder: "环境名称（如 myapp）",
+      demoEnvPathPlaceholder: "创建路径，可选（如 ~/envs/myapp）",
       demoEnvPkgPlaceholder: "依赖包，空格分隔（可选）",
       demoEnvBtn: "搭建",
+      demoEnvSelectPlaceholder: "已有环境路径（如 ~/.venv）",
+      demoEnvSelectBtn: "使用已有环境",
+      demoEnvEnterPath: "请先输入已有环境路径。",
+      demoEnvSelectRequesting: "正在请求选择环境——请在本机审批对话框中批准……",
+      demoEnvSelected: "已选择环境：",
       demoEnvOutputPlaceholder: "搭建日志会显示在这里。",
       demoManageTitle: "管理名单",
       demoWhitelistLabel: "✅ 白名单",
@@ -1254,6 +1291,7 @@ if (await w2l.isRunning()) {
   async function setupEnvDemo() {
     const type     = document.getElementById("env-type").value;
     const name     = document.getElementById("env-name").value.trim();
+    const path     = document.getElementById("env-path").value.trim();
     const packages = document.getElementById("env-packages").value.trim()
                        .split(/\s+/).filter(Boolean);
     const out      = document.getElementById("env-output");
@@ -1263,7 +1301,7 @@ if (await w2l.isRunning()) {
 
     let res;
     try {
-      res = await w2l.setupEnv({ type, name, packages });
+      res = await w2l.setupEnv({ type, name, path, packages });
     } catch (e) {
       out.textContent = "Error: " + e.message;
       out.className   = "out-err";
@@ -1304,6 +1342,30 @@ if (await w2l.isRunning()) {
         refreshLog();
       }
     }, 1500);
+  }
+
+  async function selectEnvDemo() {
+    const path = document.getElementById("env-existing-path").value.trim();
+    const out  = document.getElementById("env-output");
+
+    if (!path) {
+      out.textContent = t("demoEnvEnterPath");
+      out.className   = "out-err";
+      return;
+    }
+
+    out.className   = "out-dim";
+    out.textContent = t("demoEnvSelectRequesting");
+
+    try {
+      const res = await w2l.selectEnv(path);
+      out.textContent = `${t("demoEnvSelected")} ${res.interpreter || res.config_python || path}`;
+      out.className   = "out-ok";
+    } catch (e) {
+      out.textContent = "Error: " + e.message;
+      out.className   = "out-err";
+    }
+    refreshLog();
   }
 
   // ── Config management ─────────────────────────────────────────────────────
