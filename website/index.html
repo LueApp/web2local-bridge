@@ -680,6 +680,11 @@ if (await w2l.isRunning()) {
       <li><code>args</code> is a flat list of strings — each element is one argument.</li>
       <li>Commands time out after 30 seconds.</li>
       <li>The process inherits the daemon's environment and working directory.</li>
+      <li>A bare <code>python</code>/<code>python3</code> runs in <em>your</em> selected
+          environment (pixi/conda/venv): set <code>"python"</code> in
+          <code>config.json</code>, or rely on auto-detection of a project-local
+          <code>.venv</code>/<code>.pixi</code> or the daemon's active env. The page
+          never picks the interpreter; <code>GET /env</code> shows the resolution.</li>
     </ul>
   </section>
 
@@ -896,7 +901,12 @@ if (await w2l.isRunning()) {
       apiRulesList: `<li><code>command</code> is the executable name — no shell, no <code>&&</code>, no pipes.</li>
         <li><code>args</code> is a flat list of strings — each element is one argument.</li>
         <li>Commands time out after 30 seconds.</li>
-        <li>The process inherits the daemon's environment and working directory.</li>`,
+        <li>The process inherits the daemon's environment and working directory.</li>
+        <li>A bare <code>python</code>/<code>python3</code> runs in <em>your</em> selected
+            environment (pixi/conda/venv): set <code>"python"</code> in
+            <code>config.json</code>, or rely on auto-detection of a project-local
+            <code>.venv</code>/<code>.pixi</code> or the daemon's active env. The page
+            never picks the interpreter; <code>GET /env</code> shows the resolution.</li>`,
 
       demoTitle: "Live demo",
       demoIntro: "This page connects to your local daemon in real time.",
@@ -1040,7 +1050,8 @@ if (await w2l.isRunning()) {
       apiRulesList: `<li><code>command</code> 是可执行文件名——不经过 shell，不支持 <code>&&</code>，不支持管道。</li>
         <li><code>args</code> 是字符串列表——每个元素对应一个参数。</li>
         <li>命令 30 秒后自动超时。</li>
-        <li>子进程继承服务的环境变量和工作目录。</li>`,
+        <li>子进程继承服务的环境变量和工作目录。</li>
+        <li>裸 <code>python</code>/<code>python3</code> 会在<em>你</em>选择的环境（pixi/conda/venv）中运行：在 <code>config.json</code> 中设置 <code>"python"</code>，或依赖对项目本地 <code>.venv</code>/<code>.pixi</code> 或服务当前激活环境的自动检测。页面无法选择解释器；<code>GET /env</code> 可查看解析结果。</li>`,
 
       demoTitle: "实时演示",
       demoIntro: "本页面会实时连接到你的本地服务。",

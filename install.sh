@@ -25,7 +25,8 @@ if [ ! -f "$CONFIG" ]; then
 {
   "port": 7878,
   "whitelist": [],
-  "graylist": []
+  "graylist": [],
+  "python": ""
 }
 EOF
   echo "Created config at $CONFIG"

@@ -45,7 +45,10 @@ class Web2Local {
    * - Whitelist origins: executed immediately.
    * - Graylist origins: user sees an approval dialog first.
    *
-   * @param {string}   command  - executable name (no shell, no PATH tricks)
+   * @param {string}   command  - executable name (no shell, no PATH tricks).
+   *                              A bare "python"/"python3" is transparently
+   *                              mapped to the user's selected env (pixi/conda/
+   *                              venv); the page cannot choose the interpreter.
    * @param {string[]} args     - argument list
    * @returns {Promise<{stdout:string, stderr:string, exit_code:number}>}
    * @throws  on network error or if denied / not authorised
@@ -174,7 +177,10 @@ class Web2Local {
    *                                   Must match sha256(source); daemon rejects
    *                                   on mismatch before showing any dialog.
    * @param {string}   [opts.filename="agent.py"] - Suggested filename on disk.
-   * @param {string}   opts.command  - Interpreter (e.g. "python3").
+   * @param {string}   opts.command  - Interpreter (e.g. "python3"). A bare
+   *                                   "python"/"python3" is mapped daemon-side to
+   *                                   the user's selected env (pixi/conda/venv);
+   *                                   see getEnv() to inspect the resolution.
    * @param {string[]} [opts.args=[]] - Arguments passed after the script path.
    *
    * @returns {Promise<{pid:number, path:string, started_at:string,
@@ -210,6 +216,20 @@ class Web2Local {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     return data;
+  }
+
+  /**
+   * Inspect which python interpreter the daemon will use for a bare "python3"
+   * request. Diagnostic only — reflects the script-independent decision
+   * (config → active env → PATH fallback). The page never controls this.
+   * @returns {Promise<{interpreter:string|null, source:string,
+   *                    config_python:string,
+   *                    active:{VIRTUAL_ENV:string, CONDA_PREFIX:string}}>}
+   */
+  async getEnv() {
+    const r = await fetch(`${this.base}/env`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
   }
 
   /**

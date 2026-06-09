@@ -6,7 +6,9 @@ import json
 import os
 import queue
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,7 +26,7 @@ PROC_DIR      = os.path.join(CONFIG_DIR, "processes")   # per-PID log files
 PROC_INDEX    = os.path.join(CONFIG_DIR, "processes.json")
 AGENTS_DIR    = os.path.join(CONFIG_DIR, "agents")      # deployed scripts
 
-DEFAULT_CONFIG = {"port": 7878, "whitelist": [], "graylist": []}
+DEFAULT_CONFIG = {"port": 7878, "whitelist": [], "graylist": [], "python": ""}
 
 _config      = DEFAULT_CONFIG.copy()
 _config_lock = threading.Lock()
@@ -37,6 +39,11 @@ def _load_config():
             data = json.load(f)
         with _config_lock:
             _config = {**DEFAULT_CONFIG, **data}
+            # A hand-edited config may set "python" to a non-string (e.g. 3 or a
+            # list). Normalize to "" so the interpreter resolver — on the hot
+            # path of every /run, /spawn, /deploy — never trips on .strip().
+            if not isinstance(_config.get("python"), str):
+                _config["python"] = ""
     else:
         with _config_lock:
             _config = DEFAULT_CONFIG.copy()
@@ -335,6 +342,201 @@ def _open_text_in_editor(text: str, filename_hint: str = "script.py"):
         _open_in_editor(tmp)
     except OSError:
         pass
+
+
+# ── Python environment selection ───────────────────────────────────────────────
+# A site only ever asks to run scripts with a bare interpreter name like
+# "python3". Left alone, subprocess resolves that against the daemon's OWN PATH —
+# whatever environment the daemon happened to be launched in, which is usually
+# NOT the pixi / conda / venv the user actually develops in. _resolve_interpreter
+# rewrites that bare name to an absolute interpreter path chosen, in order:
+#
+#   1. config["python"]   — explicit user override (interpreter path, env prefix
+#                           directory, or a bare name found on PATH)
+#   2. a project-local env — .venv / venv / env / .pixi/envs/* discovered by
+#                           walking up from the target script's directory
+#   3. the daemon's active — $VIRTUAL_ENV or $CONDA_PREFIX (pixi sets the latter)
+#      environment
+#   4. (nothing matched)  — the command is left untouched, so subprocess falls
+#                           back to PATH exactly as before (no behaviour change)
+#
+# The page never names the interpreter — selection is entirely the daemon-side
+# user's, and the resolved path is shown in the approval dialog and audit log
+# before anything runs. Only bare python-family names are touched; every other
+# command (and any explicit path) passes through unchanged.
+
+# Deliberately NOT included: the Windows "py" launcher (it takes version-selector
+# flags like `-3.11` *before* the script, which a plain interpreter can't parse)
+# and "pythonw" (the windowless variant — rewriting it to python.exe would pop a
+# console). Both are left to resolve via PATH / the launcher's own mechanism.
+_PYTHON_NAMES = ("python", "python3", "python2")
+
+
+def _is_python_command(name: str) -> bool:
+    """True if `name` is a bare python interpreter name we should resolve.
+    Anything containing a path separator is an explicit choice — left as-is."""
+    if not name or os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    base = name.lower()
+    if os.name == "nt" and base.endswith(".exe"):
+        base = base[:-4]
+    if base in _PYTHON_NAMES:
+        return True
+    # Versioned interpreters: python3.11, python3.12, python2.7, python3.13t
+    # (the trailing `t` is the PEP 703 free-threaded ABI tag).
+    return bool(re.fullmatch(r"python[23](?:\.\d{1,2})?t?", base))
+
+
+def _python_exe_for_prefix(prefix: str) -> str | None:
+    """Return the python interpreter inside an env prefix directory, or None."""
+    if os.name == "nt":
+        candidates = [os.path.join(prefix, "python.exe"),
+                      os.path.join(prefix, "Scripts", "python.exe")]
+    else:
+        candidates = [os.path.join(prefix, "bin", "python"),
+                      os.path.join(prefix, "bin", "python3")]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def _interp_from_hint(hint: str) -> str | None:
+    """Resolve config["python"], which may be an interpreter path, an env prefix
+    directory, or a bare name on PATH. Returns None if nothing usable is found."""
+    hint = os.path.expanduser(os.path.expandvars(hint.strip()))
+    if not hint:
+        return None
+    if os.path.isfile(hint) and os.access(hint, os.X_OK):
+        return hint
+    if os.path.isdir(hint):
+        return _python_exe_for_prefix(hint)
+    return shutil.which(hint)
+
+
+def _path_is_trusted(path: str) -> bool:
+    """True if `path` is safe to auto-pick an interpreter from. For /run and
+    /spawn the page supplies the script path, which seeds the walk-up below — so
+    a hostile page could aim discovery at a world-writable dir (/tmp, /dev/shm)
+    where any local user has pre-planted a malicious .venv. Reject directories
+    that are world-writable or owned by someone other than us (root is fine:
+    only root could plant there, and root already owns the box). Group-writable
+    is tolerated — it is the norm under the common umask 0002 private-group
+    setup. On non-POSIX platforms the ownership/mode model doesn't apply."""
+    if not hasattr(os, "geteuid"):
+        return True
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if st.st_mode & stat.S_IWOTH:
+        return False
+    if st.st_uid not in (os.geteuid(), 0):
+        return False
+    return True
+
+
+def _find_project_python(script_path: str) -> str | None:
+    """Walk up from the script's directory looking for a project-local env.
+    Only trusted directories (see _path_is_trusted) are searched, so a
+    page-supplied script path can't steer discovery into an attacker-writable
+    location."""
+    try:
+        d = os.path.dirname(os.path.abspath(script_path))
+    except (OSError, ValueError):
+        return None
+    prev = None
+    while d and d != prev:
+        if not _path_is_trusted(d):
+            prev, d = d, os.path.dirname(d)
+            continue
+        for name in (".venv", "venv", "env"):
+            exe = _python_exe_for_prefix(os.path.join(d, name))
+            if exe:
+                return exe
+        # Pixi keeps interpreters under .pixi/envs/<name>; prefer 'default'.
+        pixi = os.path.join(d, ".pixi", "envs")
+        if os.path.isdir(pixi):
+            try:
+                names = sorted(os.listdir(pixi))
+            except OSError:
+                names = []
+            for n in (["default"] + [x for x in names if x != "default"]):
+                exe = _python_exe_for_prefix(os.path.join(pixi, n))
+                if exe:
+                    return exe
+        prev, d = d, os.path.dirname(d)
+    return None
+
+
+def _find_active_python() -> str | None:
+    """Use the env the daemon itself was launched in, if any (pixi run / conda
+    activate / source venv before starting the daemon all set these)."""
+    for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        prefix = os.environ.get(var)
+        if prefix:
+            exe = _python_exe_for_prefix(prefix)
+            if exe:
+                return exe
+    return None
+
+
+def _detect_python(script_path: str | None = None) -> tuple[str | None, str]:
+    """Resolve the interpreter to use, returning (path_or_None, source_label).
+    A None path means 'leave the command alone and let PATH resolve it'."""
+    raw_override = _get_config().get("python")
+    override = raw_override.strip() if isinstance(raw_override, str) else ""
+    if override:
+        exe = _interp_from_hint(override)
+        if exe:
+            return exe, "config"
+    if script_path:
+        exe = _find_project_python(script_path)
+        if exe:
+            return exe, "project"
+    exe = _find_active_python()
+    if exe:
+        return exe, "active-env"
+    return None, "path"
+
+
+# Interpreter options that consume the following token as their value; the
+# script (if any) comes after. `-c`/`-m` instead mean "no script file at all"
+# (the remaining tokens are program code / a module name + its args).
+_PY_OPTS_WITH_VALUE = ("-W", "-X", "-Q")
+
+
+def _script_arg(args: list) -> str | None:
+    """Return the script-file argument from a python arg list, or None.
+    Skips leading interpreter flags so `python -c code`, `python -m mod`, and
+    `python -u script.py` are read correctly — only a real script path is used
+    to anchor project-local env discovery, never a flag or `-c`/`-m` payload."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        # -c / -m mean "no script file" — both spaced (`-m mod`) and glued
+        # (`-mmod`, `-cCODE`) forms; `-` is stdin.
+        if a == "-" or a[:2] in ("-c", "-m"):
+            return None
+        if a.startswith("-"):
+            i += 2 if a in _PY_OPTS_WITH_VALUE else 1
+            continue
+        return a                        # first non-flag token = the script
+    return None
+
+
+def _resolve_interpreter(cmd_list: list) -> list:
+    """Rewrite a bare python-family command to the user's selected interpreter.
+    Non-python commands and explicit interpreter paths return unchanged."""
+    if not cmd_list or not _is_python_command(cmd_list[0]):
+        return cmd_list
+    # The script path (used only to locate a project-local env near it) is the
+    # first non-flag argument. Resolution never touches the args themselves.
+    script_path = _script_arg(cmd_list[1:])
+    exe, _source = _detect_python(script_path)
+    if not exe:
+        return cmd_list
+    return [exe] + cmd_list[1:]
 
 
 # ── Agent delivery ───────────────────────────────────────────────────────────
@@ -1217,6 +1419,33 @@ class Handler(BaseHTTPRequestHandler):
             _send_json(self, 200, {"agents": _agents_list_live()}, origin)
             return
 
+        # ── /env — report which python interpreter a "python3" request maps to ──
+        # Diagnostic only. Reflects the script-independent decision (config →
+        # active env → PATH fallback); project-local envs are resolved per script
+        # at run time, so they don't appear here. Unlike /config this exposes the
+        # daemon's own env-var values (VIRTUAL_ENV/CONDA_PREFIX, hence home-dir
+        # layout), so it is restricted to origins already trusted to run commands
+        # — they could read the same via /run anyway, and untrusted pages can't
+        # enumerate it.
+        if path == "/env":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}); return
+            if not self._classify(origin):
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                return
+            cfg_python = _get_config().get("python")
+            exe, source = _detect_python(None)
+            _send_json(self, 200, {
+                "interpreter":   exe,            # null → falls back to PATH python3
+                "source":        source,         # config | active-env | path
+                "config_python": cfg_python if isinstance(cfg_python, str) else "",
+                "active": {
+                    "VIRTUAL_ENV":  os.environ.get("VIRTUAL_ENV", ""),
+                    "CONDA_PREFIX": os.environ.get("CONDA_PREFIX", ""),
+                },
+            }, origin)
+            return
+
         self.send_response(404); self.end_headers()
 
     # ── POST ──
@@ -1332,7 +1561,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                 _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
 
-            cmd_list = [command] + args
+            cmd_list = _resolve_interpreter([command] + args)
             preview  = _read_script_preview(cmd_list)
 
             if classification == "graylist":
@@ -1420,7 +1649,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             dest_path = _deploy_resolve(filename, sha256)
-            cmd_list  = [command, dest_path] + args
+            cmd_list  = _resolve_interpreter([command, dest_path] + args)
 
             # Check if already running — re-runnable without a second dialog.
             live     = _proc_list_live()
@@ -1495,7 +1724,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                 _send_json(self, 400, {"error": "args must be a list of strings"}, origin); return
 
-            cmd_list = [command] + args
+            cmd_list = _resolve_interpreter([command] + args)
             preview  = _read_script_preview(cmd_list)
 
             if classification == "graylist":
