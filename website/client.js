@@ -233,6 +233,51 @@ class Web2Local {
   }
 
   /**
+   * Ask the daemon to CREATE a python environment when the user has none set up.
+   * The user picks the type on your page; the daemon shows a native approval
+   * dialog, then creates it asynchronously. On success it points config["python"]
+   * at the new interpreter (so future bare "python3" calls resolve to it).
+   *
+   * The page never names the interpreter and can only target $HOME: pass a short
+   * `name` (created under ~/.config/web2local/envs/<name>) or a `path` inside your
+   * home directory.
+   *
+   * @param {object}   opts
+   * @param {"venv"|"pixi"|"conda"} opts.type - Environment kind to create.
+   * @param {string}   [opts.name]     - Sandbox env name (used if no path given).
+   * @param {string}   [opts.path]     - Explicit location inside $HOME.
+   * @param {string[]} [opts.packages] - Packages to install during setup.
+   * @returns {Promise<{status:"running"|"ready", job_id?:string, log_path?:string,
+   *                    target:string, interpreter:string, already_exists?:boolean}>}
+   *   status "running" → poll setupEnvStatus(job_id). status "ready" → the env
+   *   already existed and is now selected.
+   * @throws if denied by the user, the type's tool is missing, or the path escapes $HOME.
+   */
+  async setupEnv({ type, name = "", path = "", packages = [] }) {
+    const r = await fetch(`${this.base}/setup-env`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ type, name, path, packages }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  /**
+   * Poll the progress of an async setupEnv() job.
+   * @param {string} jobId - The job_id returned by setupEnv().
+   * @returns {Promise<{job_id:string, type:string, target:string, status:string,
+   *                    interpreter:string|null, error:string, tail:string}>}
+   *   status is "running" | "done" | "failed"; `tail` is the live setup log.
+   */
+  async setupEnvStatus(jobId) {
+    const r = await fetch(`${this.base}/setup-env/status?job=${encodeURIComponent(jobId)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  /**
    * List scripts deployed via /deploy that are still on disk.
    * @returns {Promise<{agents: Array<{sha256,filename,dest_path,origin,deployed_at}>}>}
    */

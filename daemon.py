@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """web2local daemon — bridges websites to local command execution safely."""
 
+import copy
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ LOG_PATH      = os.path.join(CONFIG_DIR, "audit.log")
 PROC_DIR      = os.path.join(CONFIG_DIR, "processes")   # per-PID log files
 PROC_INDEX    = os.path.join(CONFIG_DIR, "processes.json")
 AGENTS_DIR    = os.path.join(CONFIG_DIR, "agents")      # deployed scripts
+ENVS_DIR      = os.path.join(CONFIG_DIR, "envs")        # daemon-created python envs
 
 DEFAULT_CONFIG = {"port": 7878, "whitelist": [], "graylist": [], "python": ""}
 
@@ -34,30 +36,67 @@ _config_lock = threading.Lock()
 
 def _load_config():
     global _config
+    data = {}
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
-            data = json.load(f)
-        with _config_lock:
-            _config = {**DEFAULT_CONFIG, **data}
-            # A hand-edited config may set "python" to a non-string (e.g. 3 or a
-            # list). Normalize to "" so the interpreter resolver — on the hot
-            # path of every /run, /spawn, /deploy — never trips on .strip().
-            if not isinstance(_config.get("python"), str):
-                _config["python"] = ""
-    else:
-        with _config_lock:
-            _config = DEFAULT_CONFIG.copy()
+        try:
+            with open(CONFIG_PATH) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (json.JSONDecodeError, OSError):
+            # A corrupt or unreadable config must never brick startup — fall
+            # back to defaults (the atomic writer below makes this rare anyway).
+            data = {}
+    with _config_lock:
+        _config = {**DEFAULT_CONFIG, **data}
+        # A hand-edited config may set "python" to a non-string (e.g. 3 or a
+        # list). Normalize to "" so the interpreter resolver — on the hot path
+        # of every /run, /spawn, /deploy — never trips on .strip().
+        if not isinstance(_config.get("python"), str):
+            _config["python"] = ""
+
+
+def _write_config_file(cfg: dict):
+    """Atomically write config.json (temp file + fsync + os.replace). Does NOT
+    lock — callers must already hold _config_lock. os.replace is atomic on the
+    same filesystem, so a reader or the next startup never sees a torn file."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _save_config(cfg: dict):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+    with _config_lock:
+        _write_config_file(cfg)
+
+
+def _mutate_config(fn):
+    """Atomically read-modify-write config under one lock: snapshot → apply fn →
+    publish → persist. Multiple writers now exist (HTTP handler threads AND the
+    setup worker thread), so a plain get→modify→update→save would let one writer
+    silently clobber another's field; this makes the whole sequence indivisible."""
+    global _config
+    with _config_lock:
+        cfg = copy.deepcopy(_config)
+        fn(cfg)
+        _config = cfg
+        _write_config_file(cfg)
 
 
 def _get_config() -> dict:
     with _config_lock:
-        return _config.copy()
+        return copy.deepcopy(_config)
 
 
 def _update_config(new: dict):
@@ -539,6 +578,211 @@ def _resolve_interpreter(cmd_list: list) -> list:
     return [exe] + cmd_list[1:]
 
 
+# ── Python environment provisioning ────────────────────────────────────────────
+# A site whose script has nothing to run under (GET /env → interpreter:null) can
+# ask the daemon to CREATE one: venv, pixi, or conda. The page only proposes the
+# *type*, an optional sandbox name (or a path inside $HOME), and an optional
+# package list — it never names the interpreter and never reaches outside $HOME.
+# Every request is gated by a native approval dialog. Creation runs as an async
+# job (it can take minutes); on success the daemon points config["python"] at the
+# new interpreter, so future bare "python3" requests resolve to it.
+
+_VALID_ENV_TYPES = ("venv", "pixi", "conda")
+# A package spec the page may pass. Must start alphanumeric (blocks option
+# injection like "--target=/etc") and contain no shell/path metacharacters —
+# everything runs via argv (no shell), so this is belt-and-suspenders.
+_PKG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+\-\[\]<>=!~,*]*")
+
+
+def _valid_pkg(spec: str) -> bool:
+    return isinstance(spec, str) and bool(_PKG_RE.fullmatch(spec))
+
+
+def _setup_target(name: str, path: str) -> str:
+    """Resolve where to create the env. An explicit `path` is confined to $HOME;
+    otherwise a sanitized `name` lands in ENVS_DIR. Raises ValueError if neither
+    is usable or the path escapes $HOME."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    if path:
+        t = os.path.realpath(os.path.expanduser(os.path.expandvars(path)))
+        if t != home and not t.startswith(home + os.sep):
+            raise ValueError("path must be inside your home directory")
+        if t == home:
+            raise ValueError("refusing to create an env directly in your home directory")
+        return t
+    if name:
+        safe = re.sub(r"[^\w.\-]", "_", name).strip("._-")
+        if not safe:
+            raise ValueError("invalid env name")
+        return os.path.join(ENVS_DIR, safe)
+    raise ValueError("provide an env name or a path")
+
+
+def _conda_exe() -> str | None:
+    return shutil.which("conda") or shutil.which("mamba") or shutil.which("micromamba")
+
+
+def _env_plan(env_type: str, target: str, packages: list, base_python: str):
+    """Build (steps, interpreter_path) for creating `env_type` at `target`.
+    Raises ValueError if the env_type's tool isn't installed."""
+    if env_type == "venv":
+        if os.name == "nt":
+            interp = os.path.join(target, "Scripts", "python.exe")
+        else:
+            interp = os.path.join(target, "bin", "python")
+        steps = [[base_python, "-m", "venv", target]]
+        if packages:
+            steps.append([interp, "-m", "pip", "install", *packages])
+        return steps, interp
+
+    if env_type == "pixi":
+        pixi = shutil.which("pixi")
+        if not pixi:
+            raise ValueError("pixi is not installed (not found on PATH)")
+        manifest = os.path.join(target, "pixi.toml")
+        interp = os.path.join(target, ".pixi", "envs", "default",
+                              ("python.exe" if os.name == "nt" else os.path.join("bin", "python")))
+        steps = [[pixi, "init", target],
+                 [pixi, "add", "--manifest-path", manifest, "python", *packages]]
+        return steps, interp
+
+    if env_type == "conda":
+        conda = _conda_exe()
+        if not conda:
+            raise ValueError("conda is not installed (conda/mamba/micromamba not on PATH)")
+        if os.name == "nt":
+            interp = os.path.join(target, "python.exe")
+        else:
+            interp = os.path.join(target, "bin", "python")
+        steps = [[conda, "create", "-y", "-p", target, "python", *packages]]
+        return steps, interp
+
+    raise ValueError(f"unknown env type: {env_type}")
+
+
+def _interp_ready(interp: str) -> bool:
+    return bool(interp) and os.path.isfile(interp) and os.access(interp, os.X_OK)
+
+
+# Setup jobs run in their own thread (multi-step recipes), tracked in-memory.
+# Growth is human-gated (every job needs an approved dialog) and flood-limited,
+# but we still cap the registry so a long-lived daemon doesn't accrete forever.
+_setup_lock = threading.Lock()
+_setup_jobs: dict = {}
+_setup_seq  = [0]
+_SETUP_JOBS_MAX = 100
+
+
+def _setup_persist_python(interpreter: str):
+    """Point config["python"] at a freshly created interpreter and save."""
+    _mutate_config(lambda c: c.__setitem__("python", interpreter))
+
+
+def _setup_worker(job_id: str, steps: list, interpreter: str,
+                  target: str, env_type: str, origin: str):
+    job      = _setup_jobs[job_id]
+    log_path = job["log_path"]
+    ok       = True
+    try:
+        with open(log_path, "ab") as log:
+            for step in steps:
+                log.write(("\n$ " + " ".join(step) + "\n").encode()); log.flush()
+                try:
+                    r = subprocess.run(step, stdout=log, stderr=subprocess.STDOUT,
+                                       stdin=subprocess.DEVNULL, timeout=1800)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    log.write(f"\n[error] {e}\n".encode()); ok = False; break
+                if r.returncode != 0:
+                    log.write(f"\n[step failed: exit {r.returncode}]\n".encode())
+                    ok = False; break
+            if ok and not _interp_ready(interpreter):
+                log.write(b"\n[error] interpreter not found after setup\n")
+                ok = False
+            if ok:
+                log.write(f"\n[done] interpreter ready: {interpreter}\n".encode())
+    except OSError:
+        ok = False
+
+    finished = datetime.datetime.now().isoformat(timespec="seconds")
+    # Persist config["python"] BEFORE flipping status to "done", so a client that
+    # observes "done" and then queries /env always sees the new interpreter.
+    if ok:
+        _setup_persist_python(interpreter)
+    with _setup_lock:
+        job["status"]      = "done" if ok else "failed"
+        job["finished_at"] = finished
+        if ok:
+            job["interpreter"] = interpreter
+        else:
+            job["error"] = "setup failed — see log"
+    if ok:
+        _audit("SETUP", origin, [env_type, interpreter], "env_ready")
+    else:
+        _audit("ERROR", origin, [env_type, target], "setup_failed")
+
+
+def _setup_start(env_type: str, target: str, packages: list,
+                 interpreter: str, steps: list, origin: str) -> dict:
+    os.makedirs(PROC_DIR, exist_ok=True)
+    ts       = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe     = re.sub(r"[^\w.\-]", "_", os.path.basename(target)) or "env"
+    log_path = os.path.join(PROC_DIR, f"setup-{ts}-{safe}.log")
+    # Check-dedup-register atomically so two approved requests for the SAME target
+    # can't spawn two workers racing on the same directory.
+    with _setup_lock:
+        for j in _setup_jobs.values():
+            if j["target"] == target and j["status"] == "running":
+                return dict(j)   # already building this target — surface that job
+        _setup_seq[0] += 1
+        jid = str(_setup_seq[0])
+        # Bound the registry: drop oldest finished jobs once over the cap.
+        if len(_setup_jobs) >= _SETUP_JOBS_MAX:
+            done = [k for k, v in _setup_jobs.items() if v["status"] != "running"]
+            for k in done[:len(_setup_jobs) - _SETUP_JOBS_MAX + 1]:
+                _setup_jobs.pop(k, None)
+        with open(log_path, "w") as f:
+            f.write(f"web2local environment setup\n  type     : {env_type}\n"
+                    f"  target   : {target}\n  packages : {', '.join(packages) or '(none)'}\n")
+        job = {
+            "id":         jid,
+            "type":       env_type,
+            "target":     target,
+            "packages":   packages,
+            "status":     "running",
+            "log_path":   log_path,
+            "interpreter": None,
+            "error":      "",
+            "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "finished_at": None,
+            "origin":     origin,
+        }
+        _setup_jobs[jid] = job
+    threading.Thread(target=_setup_worker,
+                     args=(jid, steps, interpreter, target, env_type, origin),
+                     daemon=True).start()
+    return job
+
+
+def _request_setup_approval(origin: str, env_type: str, target: str,
+                            packages: list, steps: list) -> bool:
+    """Queue an env-setup approval dialog and block until the user responds."""
+    if not _flood_check(origin):
+        _audit("FLOOD_BLOCKED", origin, [env_type, target], "flood_rate_limit")
+        return False
+    event  = threading.Event()
+    result = [False]
+    summary = [f"{env_type} environment → {target.replace(os.path.expanduser('~'), '~')}"]
+    _dialog_queue.put((origin, summary, event, result, {
+        "kind":     "setup",
+        "env_type": env_type,
+        "target":   target,
+        "packages": packages,
+        "steps":    steps,
+    }))
+    event.wait(timeout=135)
+    return result[0]
+
+
 # ── Agent delivery ───────────────────────────────────────────────────────────
 
 def _deploy_resolve(filename: str, sha256: str) -> str:
@@ -660,6 +904,8 @@ def _run_tk_loop(tk):
                     _show_deploy_tk_dialog(tk, root, item)
                 elif extra and extra.get("kind") == "handshake":
                     _show_handshake_tk_dialog(tk, root, item)
+                elif extra and extra.get("kind") == "setup":
+                    _show_setup_tk_dialog(tk, root, item)
                 else:
                     _show_tk_dialog(tk, root, item)
             except queue.Empty:
@@ -1087,6 +1333,128 @@ def _show_deploy_tk_dialog(tk, root, item):
     dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
 
+def _show_setup_tk_dialog(tk, root, item):
+    """Env-setup approval dialog: shows env type, target, packages, and the exact
+    commands the daemon will run to create the environment."""
+    global _dialog_active
+    origin, _summary, event, result, meta = item
+    env_type = meta["env_type"]
+    target   = meta["target"]
+    packages = meta.get("packages") or []
+    steps    = meta.get("steps") or []
+    alive    = [True]
+
+    dlg = tk.Toplevel(root)
+    dlg.title("web2local — Python Environment Setup")
+    dlg.resizable(True, True)
+    dlg.attributes("-topmost", True)
+    dlg.minsize(720, 460)
+
+    hdr = tk.Frame(dlg, bg="#143d2b", pady=14)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="🐍  Create Python Environment — Approval Required",
+             bg="#143d2b", fg="white", font=("Arial", 13, "bold")).pack()
+
+    body = tk.Frame(dlg, bg="#0d1117", padx=22, pady=12)
+    body.pack(fill="both", expand=True)
+
+    tk.Label(body, text="Requesting website:", font=("Arial", 11, "bold"),
+             fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
+    tk.Label(body, text=origin, fg="#f0a050", font=("Courier", 11, "bold"),
+             bg=body["bg"], anchor="w").pack(fill="x", pady=(0, 10))
+
+    info = tk.Frame(body, bg=body["bg"])
+    info.pack(fill="x", pady=(0, 10))
+    info.columnconfigure(1, weight=1)
+
+    def _row(label, value):
+        tk.Label(info, text=label, font=("Arial", 10, "bold"), anchor="w",
+                 fg="#e6edf3", bg=body["bg"], width=12).grid(
+            row=_row.n, column=0, sticky="nw", pady=4)
+        tk.Label(info, text=value, font=("Courier", 10), anchor="w",
+                 fg="#f0f6fc", bg=body["bg"], wraplength=520, justify="left").grid(
+            row=_row.n, column=1, sticky="w", padx=(8, 0), pady=4)
+        _row.n += 1
+    _row.n = 0
+    _row("Type:", env_type)
+    _row("Target:", target.replace(os.path.expanduser("~"), "~"))
+    _row("Packages:", ", ".join(packages) or "(none — python only)")
+
+    tk.Label(body, text="Commands to run:", font=("Arial", 11, "bold"),
+             fg="#e6edf3", bg=body["bg"], anchor="w").pack(fill="x")
+    frm = tk.Frame(body, relief="solid", bd=1, bg="#30363d")
+    frm.pack(fill="both", expand=True, pady=(4, 0))
+    txt  = tk.Text(frm, font=("Courier", 10), height=6, wrap="none",
+                   bg="#0d1117", fg="#f0f6fc", insertbackground="#f0f6fc",
+                   padx=10, pady=8, bd=0)
+    sb_y = tk.Scrollbar(frm, orient="vertical",   command=txt.yview)
+    sb_x = tk.Scrollbar(frm, orient="horizontal", command=txt.xview)
+    txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+    for s in steps:
+        txt.insert("end", "$ " + " ".join(
+            f'"{a}"' if (" " in a or not a) else a for a in s) + "\n")
+    txt.config(state="disabled")
+    sb_y.pack(side="right",  fill="y")
+    sb_x.pack(side="bottom", fill="x")
+    txt.pack(fill="both", expand=True)
+
+    tk.Label(body,
+             text="This creates a new environment and may download packages from the internet.",
+             fg="#cc0000", bg=body["bg"], font=("Arial", 9, "italic"), anchor="w").pack(fill="x", pady=(8, 0))
+
+    remaining = [120]
+    timer_var = tk.StringVar(value="Auto-deny in 120 s")
+    tk.Label(body, textvariable=timer_var, fg="#888", bg=body["bg"],
+             font=("Arial", 8), anchor="w").pack(fill="x")
+
+    def _approve():
+        global _dialog_active
+        if not alive[0]:
+            return
+        alive[0]       = False
+        result[0]      = True
+        _dialog_active = False
+        event.set()
+        dlg.destroy()
+
+    def _deny():
+        global _dialog_active
+        if not alive[0]:
+            return
+        alive[0]       = False
+        result[0]      = False
+        _dialog_active = False
+        event.set()
+        dlg.destroy()
+
+    def _tick():
+        if not alive[0]:
+            return
+        remaining[0] -= 1
+        if remaining[0] <= 0:
+            _deny()
+            return
+        timer_var.set(f"Auto-deny in {remaining[0]} s")
+        dlg.after(1000, _tick)
+    dlg.after(1000, _tick)
+
+    dlg.protocol("WM_DELETE_WINDOW", _deny)
+
+    btn = tk.Frame(dlg, bg="#0d1117", padx=22, pady=14)
+    btn.pack(fill="x")
+    tk.Button(btn, text="Deny", command=_deny,
+              bg="#c0392b", fg="white", font=("Arial", 10, "bold"),
+              width=12, relief="flat", pady=6).pack(side="left")
+    tk.Button(btn, text="Allow — Create env", command=_approve,
+              bg="#1a6b3a", fg="white", font=("Arial", 10, "bold"),
+              width=20, relief="flat", pady=6).pack(side="right")
+
+    dlg.update_idletasks()
+    sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+    w,  h  = dlg.winfo_width(),       dlg.winfo_height()
+    dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+
 def _show_handshake_tk_dialog(tk, root, item):
     """First-contact dialog: a new site wants to connect. User picks trust level."""
     global _dialog_active
@@ -1207,6 +1575,18 @@ def _run_terminal_loop():
                         print(f"  ---")
                     print(sep)
                     print("  Verify the SHA-256 before answering.")
+                elif kind == "setup":
+                    print(f"\n{sep}")
+                    print("[web2local] PYTHON ENV SETUP APPROVAL REQUIRED")
+                    print(sep)
+                    print(f"  Site     : {origin}")
+                    print(f"  Type     : {meta['env_type']}")
+                    print(f"  Target   : {meta['target']}")
+                    print(f"  Packages : {', '.join(meta.get('packages') or []) or '(none)'}")
+                    print("  Steps:")
+                    for s in meta.get("steps", []):
+                        print(f"    $ {' '.join(s)}")
+                    print(sep)
                 else:  # kind == "script"
                     origin, cmd_list, event, result, preview = item
                     print(f"\n{sep}")
@@ -1446,6 +1826,37 @@ class Handler(BaseHTTPRequestHandler):
             }, origin)
             return
 
+        # ── /setup-env/status — poll an async env-creation job ──
+        if path == "/setup-env/status":
+            if not self._host_ok():
+                _send_json(self, 403, {"error": "invalid host"}); return
+            if not self._classify(origin):
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                return
+            from urllib.parse import urlparse, parse_qs
+            jid = parse_qs(urlparse(full).query).get("job", [""])[0]
+            with _setup_lock:
+                job = _setup_jobs.get(jid)
+                job = dict(job) if job else None
+            # Scope to the owning origin. A foreign job reads as 404 (not 403) so a
+            # probing site can't use sequential IDs as an existence oracle on
+            # another trusted origin's jobs.
+            if not job or job.get("origin", "").rstrip("/") != origin.rstrip("/"):
+                _send_json(self, 404, {"error": "unknown job"}, origin); return
+            _send_json(self, 200, {
+                "job_id":      job["id"],
+                "type":        job["type"],
+                "target":      job["target"],
+                "packages":    job["packages"],
+                "status":      job["status"],        # running | done | failed
+                "interpreter": job["interpreter"],
+                "error":       job["error"],
+                "started_at":  job["started_at"],
+                "finished_at": job["finished_at"],
+                "tail":        _proc_tail(job["log_path"], 200),
+            }, origin)
+            return
+
         self.send_response(404); self.end_headers()
 
     # ── POST ──
@@ -1475,24 +1886,22 @@ class Handler(BaseHTTPRequestHandler):
             url = data.get("origin", "").rstrip("/")
             if not url or url == "null":
                 _send_json(self, 400, {"error": "missing or invalid origin"}, origin); return
-            cfg  = _get_config()
             list_key  = "whitelist" if path == "/config/whitelist" else "graylist"
             other_key = "graylist"  if list_key == "whitelist"     else "whitelist"
-            cfg[other_key] = [o for o in cfg[other_key] if o.rstrip("/") != url]
-            if url not in [o.rstrip("/") for o in cfg[list_key]]:
-                cfg[list_key].append(url)
-            _update_config(cfg)
-            _save_config(cfg)
+            def _apply(cfg):
+                cfg[other_key] = [o for o in cfg[other_key] if o.rstrip("/") != url]
+                if url not in [o.rstrip("/") for o in cfg[list_key]]:
+                    cfg[list_key].append(url)
+            _mutate_config(_apply)
             _send_json(self, 200, {"status": "added", "list": list_key, "origin": url}, origin)
             return
 
         if path == "/config/remove":
             url = data.get("origin", "").rstrip("/")
-            cfg = _get_config()
-            cfg["whitelist"] = [o for o in cfg["whitelist"] if o.rstrip("/") != url]
-            cfg["graylist"]  = [o for o in cfg["graylist"]  if o.rstrip("/") != url]
-            _update_config(cfg)
-            _save_config(cfg)
+            def _apply(cfg):
+                cfg["whitelist"] = [o for o in cfg["whitelist"] if o.rstrip("/") != url]
+                cfg["graylist"]  = [o for o in cfg["graylist"]  if o.rstrip("/") != url]
+            _mutate_config(_apply)
             _send_json(self, 200, {"status": "removed"}, origin)
             return
 
@@ -1519,13 +1928,12 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, 200, {"status": "trusted", "level": "session"}, origin)
                 _audit("ALLOWED", req_origin, [], "handshake_session")
             elif level in ("graylist", "whitelist"):
-                cfg = _get_config()
                 other = "whitelist" if level == "graylist" else "graylist"
-                cfg[other] = [o for o in cfg[other] if o.rstrip("/") != req_origin]
-                if req_origin not in [o.rstrip("/") for o in cfg[level]]:
-                    cfg[level].append(req_origin)
-                _update_config(cfg)
-                _save_config(cfg)
+                def _apply(cfg):
+                    cfg[other] = [o for o in cfg[other] if o.rstrip("/") != req_origin]
+                    if req_origin not in [o.rstrip("/") for o in cfg[level]]:
+                        cfg[level].append(req_origin)
+                _mutate_config(_apply)
                 _send_json(self, 200, {"status": "trusted", "level": level}, origin)
                 _audit("ALLOWED", req_origin, [], f"handshake_{level}")
             return
@@ -1543,6 +1951,87 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, 404, {"error": "agent not found"}, origin); return
             _audit("DELETE", origin, [sha256[:8]], "agent_deleted")
             _send_json(self, 200, {"status": "deleted"}, origin)
+            return
+
+        # ── /setup-env — create a venv/pixi/conda env, then point config at it ──
+        # The page proposes type + (name|path) + packages; the daemon confines the
+        # location to $HOME, shows a native approval dialog, and runs the creation
+        # as an async job. On success config["python"] points at the new env.
+
+        if path == "/setup-env":
+            classification = self._classify(origin)
+            if not classification:
+                _send_json(self, 403, {"error": "origin not in whitelist or graylist"}, origin)
+                _audit("BLOCKED", origin or "unknown", [], "not_in_list")
+                return
+
+            env_type = data.get("type", "")
+            name     = data.get("name", "")
+            path_in  = data.get("path", "")
+            packages = data.get("packages", [])
+
+            if env_type not in _VALID_ENV_TYPES:
+                _send_json(self, 400, {"error": f"type must be one of {list(_VALID_ENV_TYPES)}"}, origin); return
+            if not isinstance(name, str) or not isinstance(path_in, str):
+                _send_json(self, 400, {"error": "name and path must be strings"}, origin); return
+            if not isinstance(packages, list) or not all(isinstance(p, str) for p in packages):
+                _send_json(self, 400, {"error": "packages must be a list of strings"}, origin); return
+            bad = [p for p in packages if not _valid_pkg(p)]
+            if bad:
+                _send_json(self, 400, {"error": f"invalid package spec: {bad[0]!r}"}, origin); return
+
+            try:
+                target = _setup_target(name, path_in)
+            except ValueError as e:
+                _send_json(self, 400, {"error": str(e)}, origin); return
+
+            base_python = sys.executable or shutil.which("python3") or "python3"
+            try:
+                steps, interpreter = _env_plan(env_type, target, packages, base_python)
+            except ValueError as e:
+                _send_json(self, 400, {"error": str(e)}, origin); return
+
+            # Idempotent no-dialog fast path ONLY for envs this feature created
+            # (under ENVS_DIR). A page-supplied `path` can point its fixed
+            # "<target>/bin/python" at any pre-existing executable under $HOME, so
+            # adopting that silently would let a trusted page repoint the user's
+            # default python with no approval — it must go through the dialog (or
+            # be refused as an existing dir below).
+            # Check the env DIRECTORY (not the interpreter — a venv's bin/python
+            # is a symlink to the base python, which lives outside ENVS_DIR).
+            envs_root  = os.path.realpath(ENVS_DIR) + os.sep
+            in_sandbox = os.path.realpath(target).startswith(envs_root)
+            if _interp_ready(interpreter) and in_sandbox:
+                _setup_persist_python(interpreter)
+                _audit("SETUP", origin, [env_type, interpreter], "already_exists")
+                _send_json(self, 200, {
+                    "status": "ready", "interpreter": interpreter,
+                    "target": target, "already_exists": True,
+                }, origin)
+                return
+            # Refuse to touch an already-populated directory (includes a
+            # page-supplied path that already holds an interpreter — never adopted
+            # silently, never clobbered).
+            if os.path.isdir(target) and os.listdir(target):
+                _send_json(self, 400, {
+                    "error": f"target already exists: {target}"
+                }, origin); return
+
+            approved = _request_setup_approval(origin, env_type, target, packages, steps)
+            if not approved:
+                _send_json(self, 403, {"error": "env setup denied by user"}, origin)
+                _audit("DENIED", origin, [env_type, target], "setup_denied_by_user")
+                return
+
+            job = _setup_start(env_type, target, packages, interpreter, steps, origin)
+            _audit("APPROVED", origin, [env_type, target], "setup_started")
+            _send_json(self, 200, {
+                "status":      "running",
+                "job_id":      job["id"],
+                "log_path":    job["log_path"],
+                "target":      target,
+                "interpreter": interpreter,   # where it WILL be once the job finishes
+            }, origin)
             return
 
         # ── /spawn — start a long-running process, return immediately ──
