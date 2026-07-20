@@ -344,6 +344,11 @@
       border-top: 1px solid var(--border); margin-top: 80px;
       padding: 28px 0; text-align: center; color: var(--muted); font-size: .82rem;
     }
+    .footer-inner {
+      display: flex; align-items: center; justify-content: center;
+      gap: 8px; flex-wrap: wrap; padding: 0 16px;
+    }
+    .footer-link { font-weight: 600; }
 
     @media (max-width: 600px) {
       h1 { font-size: 1.8rem; }
@@ -865,8 +870,13 @@ if (await w2l.isRunning()) {
 
 </main>
 
-<footer data-i18n="footerText">
-  web2local — runs on your machine, serves your websites.
+<footer>
+  <div class="footer-inner">
+    <span data-i18n="footerText">web2local — runs on your machine, serves your websites.</span>
+    <span aria-hidden="true">·</span>
+    <a class="footer-link" href="https://lue-app.com/" target="_blank"
+       rel="noopener noreferrer" data-i18n="footerLueLink">Explore more tools by Lue →</a>
+  </div>
 </footer>
 
 <script src="client.js"></script>
@@ -1039,6 +1049,7 @@ if (await w2l.isRunning()) {
       navAgents: "Deployed",
 
       footerText: "web2local — runs on your machine, serves your websites.",
+      footerLueLink: "Explore more tools by Lue →",
     },
 
     zh: {
@@ -1201,6 +1212,7 @@ if (await w2l.isRunning()) {
       navAgents: "已部署",
 
       footerText: "web2local — 在你的电脑上运行，为你的网站服务。",
+      footerLueLink: "浏览 Lue 的更多工具 →",
     },
   };
 
