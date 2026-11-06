@@ -169,6 +169,7 @@ def _audit(action: str, origin: str, command: list, outcome: str):
 # and a log file path. Liveness is checked on every /ps call.
 
 _proc_lock = threading.Lock()
+_PROC_HISTORY_MAX = 256  # Keep exited-process logs available to the client.
 
 
 def _proc_stat(pid: int):
@@ -222,12 +223,23 @@ def _proc_save(entries: list):
 
 def _proc_list_live() -> list:
     """Return registry filtered to processes that are still alive.
-    Also prunes dead entries from the on-disk index."""
+    Keep a bounded history of dead entries on disk so clients can fetch the
+    launcher's output after observing its exit in /ps."""
     with _proc_lock:
         entries = _proc_load()
-        live    = [e for e in entries if _proc_alive(e["pid"], e["starttime"])]
-        if len(live) != len(entries):
-            _proc_save(live)
+        live = []
+        dead = []
+        for entry in entries:
+            if _proc_alive(entry["pid"], entry["starttime"]):
+                live.append(entry)
+            else:
+                dead.append(entry)
+        # /ps must not erase a just-exited launcher's log before the browser
+        # follows up with /logs. Bound disk index growth while retaining recent
+        # completed processes for diagnostics.
+        retained = live + dead[-_PROC_HISTORY_MAX:]
+        if len(retained) != len(entries):
+            _proc_save(retained)
         return live
 
 
